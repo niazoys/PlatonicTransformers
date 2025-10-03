@@ -38,7 +38,7 @@ Welcome to the Platonic Transformer project, where geometric group theory meets 
    ```bash
    source .venv/bin/activate
    ```
-4. **Authenticate with Weights & Biases** (ask Erik or Mohammad for an invite 🙂):
+4. **Authenticate with Weights & Biases** :
    ```bash
    wandb login
    ```
@@ -61,6 +61,4 @@ The heart of the project sits in `models/platoformer/platoformer.py`:
 - **Positional Encoding:** Choose between rotational positional encodings (RoPE) and absolute encodings (APE) tuned per solid.
 - **Readout:** Separate scalar/vector readouts followed by pooling yield graph-level or node-level predictions, configurable via `scalar_task_level` and `vector_task_level`.
 
-## Contributing 🤝
-1. Create a feature branch.
-2. Submit a PR referencing related tasks.
+
