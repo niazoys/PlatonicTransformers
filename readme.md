@@ -1,14 +1,14 @@
-# Platonic Transformer 😎
+# Platonic Transformer
 
-Welcome to the Platonic Transformer project, where geometric group theory meets modern attention architectures 🌟. This repository contains research code for Platonic-Group-equivariant Transformers that operate on scalar and vector features defined over the nodes of Platonic solids. We combine group convolutions and (linear) attention to deliver accurate, symmetry-aware models. 😄
+Welcome to the Platonic Transformer project, where geometric group theory meets modern attention architectures 🌟. This repository contains research code for Platonic-Group-equivariant Transformers that operate on scalar and vector features operating over the frames defined by Platonic solid symmetry groups. We combine group convolutions and (linear) attention to deliver accurate, symmetry-aware models that are as fast as `torch.nn.TransformerEncoder`.
 
-## Why You May Love This Project 🙂
+## Why You May Love This Project
 - **Group-equivariant attention** that respects the symmetry group of the chosen Platonic solid (tetrahedron, octahedron, icosahedron 🧊).
 - **Unified scalar/vector processing** with shared Platonic blocks for graph- and node-level predictions.
 - **Supports multiple benchmarks** including CIFAR-10, ImageNet-1k, QM9 regression, ModelNet40, ShapeNet Cars, Protein folding, and Open Molecule Learning.
 - **WandB integration** for centralized experiment tracking with teammates.
 
-## Repository Tour 👀
+## Repository Tour
 ```
 .
 ├── datasets/                # Dataset wrappers and loaders for supported benchmarks
@@ -23,7 +23,7 @@ Welcome to the Platonic Transformer project, where geometric group theory meets 
 │       └── platoformer.py   # Full PlatonicTransformer module
 ├── utils.py                # Shared training utilities (logging, metrics, augmentation)
 ├── setup.sh                # Environment bootstrapper
-└── readme.md               # You are here 😇
+└── readme.md               # You are here
 ```
 
 ## Getting Started 🚀
@@ -42,6 +42,27 @@ Welcome to the Platonic Transformer project, where geometric group theory meets 
    ```bash
    wandb login
    ```
+> For most tasks, our models were trained on a single GPU (eg: A100/H200). We recommend having at least 32GiB VRAM.
+
+## Using Platonic Transformer
+
+The Platonic Transformer layer is a stand-in replacement for `torch.nn.TransformerEncoder`. We barely introduce any overhead, making the Platonic Transformer blazingly fast during training and inference.
+
+```python
+from platoformer import PlatonicTransformer
+
+class MyCoolNet(nn.Module):
+    def __init__(self, ...):
+        super().__init__()
+        # the old you:
+        self.layer = torch.nn.TransformerEncoder(...)
+
+        # the new, cooler you:
+        self.layer = PlatonicTransformer(...)
+
+    def forward(self, node_ftrs, node_pos):
+        x = self.layer(node_ftrs, node_pos)
+```
 
 ## Training Workflows 🏋️‍♀️
 Each `main_*.py` script exposes dataset-specific defaults. Pass `--help` for full CLI options, or keep things simple with the out-of-the-box settings:
