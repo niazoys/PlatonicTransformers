@@ -212,8 +212,8 @@ python mains/main_omol.py --predict_forces --force_weight 100
 | `octahedron_reflections`            | 3   | Axis-aligned reflections (x/y/z)   | 8                                           | Independent flips about x, y, z; useful when parity (mirror) cues matter.           |
 | `cyclic_n` (n = 2…20)               | 2   | Rotation-only                      | \(n\)                                       | 2D discrete rotations; e.g., `cyclic_4`, `cyclic_6`.                                |
 | `dihedral_n` (n = 2…20)             | 2   | Rotations + reflections            | \(2n\)                                      | 2D rotations **and** mirror symmetry; e.g., `dihedral_4`, `dihedral_6`.             |
-| `flop_1`                            | 2   | Single-axis reflection (x-axis)    | 2                                           | Reflect across x-axis (flip y); minimal reflection ablation.                        |
-| `flop_2`                            | 2   | Single-axis reflection (y-axis)    | 2                                           | Reflect across y-axis (flip x); minimal reflection ablation.                        |
+| `flop_2d_<axis>` (axis = 1, 2)      | 2   | Single-axis reflection             | 2                                           | Axis 1: reflect across x-axis (flip y); Axis 2: reflect across y-axis (flip x).    |
+| `flop_3d_<axis>` (axis = 1, 2, 3)   | 3   | Single-axis reflection             | 2                                           | Axis 1: YZ-plane (flip x); Axis 2: XZ-plane (flip y); Axis 3: XY-plane (flip z).   |
 
 **Examples**
 ```bash
