@@ -84,7 +84,6 @@ python meta_main.py omol --predict_forces --force_weight 100
 ├── utils/                   # Config loader and helper utilities
 ├── requirements.txt         # Python dependencies
 ├── setup.sh                 # Environment setup script
-└── run.job                  # Example Slurm job file
 ```
 
 
