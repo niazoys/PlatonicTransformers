@@ -1,0 +1,29 @@
+# -- PyTorch and PyG Configuration --
+--extra-index-url https://download.pytorch.org/whl/cu124
+--find-links https://data.pyg.org/whl/torch-2.4.0+cu124.html
+
+# -- Core ML & DS Stack --
+torch==2.4.0
+torchvision
+torchaudio
+pytorch-lightning
+torchmetrics
+torch_geometric
+torch_scatter
+torch_sparse
+torch_cluster
+torch_spline_conv
+timm
+
+# -- Project Specific --
+fairchem-core
+ase-db-backends
+mendeleev
+scikit-learn
+rdkit
+
+# -- Utilities --
+wandb
+ipdb
+ml-collections
+pyyaml

@@ -1,0 +1,97 @@
+# OMol Energy and Force Prediction Configuration
+
+seed: 42
+
+# Dataset configuration
+dataset:
+  name: "omol"
+  data_dir: "/opt/datasets/ivi/ivi_omol"
+  split: "main_split" 
+  num_workers_preload: 8
+  preload_data: true
+  scalar_features: []  # Additional scalar features, e.g., ["coords", "charges"]
+  vector_features: []  # Additional vector features, e.g., ["coords"]
+  debug_subset: null  # Use a subset for debugging (e.g., 1000)
+  referencing: true  # Use per-atom referencing for target energy
+  include_hof: false  # Normalize target using HOF values
+  scale_shift: false  # Use scale and shift normalization
+  recalculate_stats: false  # Recalculate dataset statistics
+  use_khot_encoding: true  # Use k-hot encoding for atom types
+  
+# Model architecture
+model:
+  name: "platoformer"
+  hidden_dim: 1152
+  num_layers: 14
+  num_heads: 72
+  solid_name: "tetrahedron"  # Options: tetrahedron, trivial_3, octahedron, icosahedron
+  spatial_dim: 3
+  dense_mode: false
+  predict_forces: true  # If true, direct force prediction; if false, forces from energy gradient
+  
+  # Task configuration (dynamically set based on predict_forces)
+  scalar_task_level: "graph"
+  vector_task_level: "node"  
+  ffn_readout: true
+  
+  # Attention settings
+  mean_aggregation: false
+  attention: true
+  dropout: 0.0
+  drop_path_rate: 0.0
+  layer_scale_init_value: null
+  ffn_dim_factor: 4
+  
+  # Positional encoding
+  rope_sigma: 4.0
+  ape_sigma: null
+  learned_freqs: true
+  freq_init: "random"  # Options: "random", "spiral"
+  use_key: false
+
+# Training configuration
+training:
+  epochs: 40
+  batch_size: 32
+  gradient_clip_val: 1.0
+  train_augm: true  # Rotation augmentation
+  lambda_F: 5.0  # Weight for force loss
+
+# Optimizer configuration
+optimizer:
+  name: "adamw"
+  lr: 2.0e-4
+  weight_decay: 1.0e-6
+  ema: false  # Exponential moving average
+  ema_decay: 0.999
+
+# Scheduler configuration
+scheduler:
+  name: "cosine"
+  warmup_epochs: 0
+  use_cosine: true
+
+# Logging configuration
+logging:
+  enabled: true
+  project_name: "Platonic-OMol"
+  wandb_run_name: null
+  wandb_identity: null
+  log_every_n_steps: 50
+
+# System configuration
+system:
+  gpus: 1
+  num_workers: 0
+  enable_progress_bar: true
+  accumulate_grad_batches: 1
+  strategy: "auto"  # "ddp" for multi-GPU
+  precision: "32"  # Options: "16-mixed", "bf16-mixed", "32"
+  timer: null  # Timer for training, e.g., "00:08:00:00"
+
+# Testing/checkpointing
+testing:
+  test_ckpt: null
+  resume_ckpt: null
+  load_weights: null  # Path to load model weights from for a new run
+

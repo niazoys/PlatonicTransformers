@@ -1,0 +1,83 @@
+# CIFAR-10 Classification with DeiT-III inspired settings
+seed: 42
+# Dataset configuration
+dataset:
+  name: "cifar10"
+  data_dir: "./data/cifar10"
+  num_classes: 10
+  image_size: 32
+  patch_size: 4
+  train_val_split: 0.9  # 90% train, 10% validation from training set
+
+# Model architecture
+model:
+  name: "platoformer"
+  hidden_dim: 768
+  num_layers: 12
+  num_heads: 12
+  solid_name: "cyclic_4"  # Symmetry group (trivial_2, cyclic_#, dihedral_#, flop)
+  spatial_dim: 2  # CIFAR-10 treated as 2D point cloud
+  dense_mode: true
+  
+  # Task configuration
+  scalar_task_level: "graph"  # Graph-level classification
+  vector_task_level: "graph"
+  ffn_readout: false
+  
+  # Attention settings
+  mean_aggregation: false
+  attention: true
+  dropout: 0.0
+  drop_path_rate: 0.1  # Stochastic depth
+  layer_scale_init_value: null  # Set to float to enable LayerScale
+  ffn_dim_factor: 4
+  
+  # Positional encoding (RoPE and APE)
+  rope_sigma: 16.0
+  ape_sigma: 16.0
+  learned_freqs: true
+  freq_init: "spiral"  # Options: "random", "spiral"
+  use_key: false
+
+# Training configuration (overrides defaults)
+training:
+  epochs: 500
+  batch_size: 256
+  loss_fn: "bce"  # Options: "cross_entropy", "bce"
+  
+  # Data augmentation
+  train_augm: false  # Rotation augmentation on point cloud
+  use_deit3_augmentation: true  # 3-Augment + Color Jitter
+
+# Optimizer configuration (DeiT-III uses LAMB)
+optimizer:
+  name: "lamb"  # Options: "adamw", "lamb"
+  lr: 8.0e-4
+  weight_decay: 0.05
+
+# Scheduler configuration
+scheduler:
+  name: "cosine"
+  warmup_epochs: 20
+
+# Logging configuration
+logging:
+  enabled: true
+  project_name: "Platonic-CIFAR10"
+
+# System configuration
+system:
+  gpus: 1
+  num_workers: 4
+  enable_progress_bar: true
+
+# Testing configuration
+testing:
+  test_ckpt: null  # Path to checkpoint for testing only
+  resume_ckpt: null  # Path to checkpoint to resume training
+
+# Checkpoint configuration
+checkpoint:
+  monitor: "valid_acc"
+  mode: "max"
+  save_last: true

@@ -1,0 +1,96 @@
+# QM9 Molecular Property Regression Configuration
+
+seed: 42
+
+# Dataset configuration
+dataset:
+  name: "qm9"
+  data_dir: "./data/qm9"
+  target: "mu"  # Options: mu, alpha, homo, lumo, gap, r2, zpve, U0, U, H, G, Cv, U0_atom, U_atom, H_atom, G_atom, A, B, C
+  num_splits: [110000, 10000, 10831]  # train, val, test
+  use_k_hot_encoding: true  # Use k-hot embedding for atoms
+
+# Model architecture
+model:
+  name: "platoformer"
+  hidden_dim: 1152
+  num_layers: 14
+  num_heads: 48
+  solid_name: "octahedron"  # Options: tetrahedron, trivial_3, octahedron, icosahedron
+  spatial_dim: 3
+  dense_mode: false
+  
+  # Task configuration
+  scalar_task_level: "graph"
+  vector_task_level: "graph"
+  ffn_readout: true
+  
+  # Attention settings
+  mean_aggregation: false
+  attention: true
+  dropout: 0.0
+  drop_path_rate: 0.0
+  layer_scale_init_value: null
+  ffn_dim_factor: 4
+  
+  # Positional encoding
+  rope_sigma: 4.0  # Use 4.0 with spiral init, 1.0 with random init
+  ape_sigma: 0.5
+  learned_freqs: true
+  freq_init: "spiral"  # Options: "random", "spiral"
+  use_key: false
+
+# Training configuration
+training:
+  epochs: 1000
+  batch_size: 96
+  gradient_clip_val: 0.5
+  train_augm: true  # Rotation augmentation
+
+# Optimizer configuration
+optimizer:
+  name: "adamw"
+  lr: 5.0e-4
+  weight_decay: 1.0e-8
+
+# Scheduler configuration
+scheduler:
+  name: "cosine"
+  warmup_epochs: 10
+  use_cosine: true
+
+# Logging configuration
+logging:
+  enabled: true
+  project_name: "Platonic-QM9-Regr"
+  wandb_identity: null
+  log_every_n_steps: 50
+
+# System configuration
+system:
+  gpus: 1
+  num_workers: 0
+  enable_progress_bar: true
+  timer: null  # e.g., "00:08:00:00" for SLURM time limit
+  precision: "32"  # Options: "16-mixed", "bf16-mixed", "32"
+
+# Testing/checkpointing
+testing:
+  test_ckpt: null
+  resume_ckpt: null
+
+# Callbacks
+callbacks:
+  early_stopping:
+    enabled: true
+    monitor: "val MAE"
+    patience: 3
+    threshold: 0.8
+    grace_epochs: 10
+
+# Checkpoint configuration
+checkpoint:
+  monitor: "valid MAE"
+  mode: "min"
+  save_last: true
+
