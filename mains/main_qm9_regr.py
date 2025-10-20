@@ -380,18 +380,3 @@ if __name__ == "__main__":
     # Run training
     main(config)
     
-    # System and checkpointing
-    parser.add_argument('--gpus', type=int, default=1, help='Number of GPUs to use (0 for CPU).')
-    parser.add_argument('--precision', type=str, default='32', choices=['16-mixed', 'bf16-mixed', '32'], help='Precision for training: 16 or 32.')
-    parser.add_argument('--num_workers', type=int, default=0, help='Number of data loading workers.')
-    parser.add_argument('--enable_progress_bar', type=eval, default=True, help='Show progress bar during training.')
-    parser.add_argument('--test_ckpt', type=str, default=None, help='Path to a checkpoint for testing.')
-    parser.add_argument('--resume_ckpt', type=str, default=None, help='Path to a checkpoint to resume training from.')
-    
-    args = parser.parse_args()
-
-    if args.config is not None:
-        for key, value in args.config.items():
-            setattr(args, key, value)
-
-    main(args)
