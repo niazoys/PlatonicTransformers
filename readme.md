@@ -164,6 +164,17 @@ python mains/main_omol.py --predict_forces --force_weight 100
 - `--layers` - Number of transformer layers
 - `--num_heads` - Number of attention heads
 
+  **Note on Hidden Dimension:** For the model to work correctly, `--hidden_dim` must be divisible by both the order of the chosen group (`|G|`) and the specified `--num_heads`. The internal dimensions for attention are calculated automatically from these values.
+
+  **Example:**
+  Let's say you use `--solid_name tetrahedron`, `--hidden_dim 768`, and `--num_heads 48`.
+  - The `tetrahedron` group has an order `|G| = 12`.
+  - The feature dimension per group element is `hidden_dim / |G| = 768 / 12 = 64`.
+  - The dimension of each attention head is `hidden_dim / num_heads = 768 / 48 = 16`.
+  - The number of independent heads applied to each group element's features is `(hidden_dim / |G|) / (hidden_dim / num_heads) = 64 / 16 = 4`.
+  
+  This means the model will run 4 attention heads per group element, where each head has a dimension of 16.
+
 **Positional Encodings:**
 - `--rope_sigma` - Sigma for Rotational Positional Encoding (RoPE)
 - `--ape_sigma` - Sigma for Absolute Positional Encoding (APE)
