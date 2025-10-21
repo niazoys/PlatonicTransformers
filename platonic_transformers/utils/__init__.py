@@ -1,7 +1,7 @@
 """Utils package for training utilities and callbacks."""
 
 # For backward compatibility, expose callbacks through utils.utils
-from utils.callbacks import (
+from platonic_transformers.utils.callbacks import (
     MemoryMonitorCallback,
     NaNDetectorCallback,
     StopOnPersistentDivergence,

@@ -13,13 +13,13 @@ from contextlib import suppress
 import torch
 import torch.nn as nn
 
-from models.baseline.esen.models.uma.nn.mole import (
+from platonic_transformers.models.baseline.esen.models.uma.nn.mole import (
     MOLE,
     MOLEDGL,
     MOLEGlobals,
     norm_str_to_fn,
 )
-from models.baseline.esen.models.uma.nn.so2_layers import SO2_Convolution
+from platonic_transformers.models.baseline.esen.models.uma.nn.so2_layers import SO2_Convolution
 
 fairchem_cpp_found = False
 with suppress(ModuleNotFoundError):

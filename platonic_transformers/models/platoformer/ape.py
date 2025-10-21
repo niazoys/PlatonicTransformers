@@ -1,8 +1,8 @@
 import torch
 import torch.nn as nn
 from torch import Tensor
-import math
-from .groups import PLATONIC_GROUPS
+
+from platonic_transformers.models.platoformer.groups import PLATONIC_GROUPS
 
 
 class APE(nn.Module):

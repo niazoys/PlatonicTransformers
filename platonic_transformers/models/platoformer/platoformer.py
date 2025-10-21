@@ -3,11 +3,11 @@ import torch.nn as nn
 from torch import Tensor
 from typing import Optional
 
-from .block import PlatonicBlock
-from .groups import PLATONIC_GROUPS
-from .linear import PlatonicLinear
-from .io import to_dense_and_mask, pool, lift, to_scalars_vectors
-from .ape import PlatonicAPE as APE
+from platonic_transformers.models.platoformer.block import PlatonicBlock
+from platonic_transformers.models.platoformer.groups import PLATONIC_GROUPS
+from platonic_transformers.models.platoformer.linear import PlatonicLinear
+from platonic_transformers.models.platoformer.io import to_dense_and_mask, pool, lift, to_scalars_vectors
+from platonic_transformers.models.platoformer.ape import PlatonicAPE as APE
 
 
 class PlatonicTransformer(nn.Module):

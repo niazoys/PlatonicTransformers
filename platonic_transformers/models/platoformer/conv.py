@@ -4,7 +4,6 @@ import torch.nn.functional as F
 from torch.nn.attention import SDPBackend, sdpa_kernel
 from torch import Tensor
 from typing import Optional
-import math
 
 from torch_scatter import scatter_softmax,scatter_sum
 
@@ -13,11 +12,10 @@ try:
 except ImportError:
     knn_graph = None
 
-# Assumes these modules are in your project structure
-from .utils import scatter_add
-from .rope import PlatonicRoPE
-from .linear import PlatonicLinear
-from .groups import PLATONIC_GROUPS
+from platonic_transformers.models.platoformer.utils import scatter_add
+from platonic_transformers.models.platoformer.rope import PlatonicRoPE
+from platonic_transformers.models.platoformer.linear import PlatonicLinear
+from platonic_transformers.models.platoformer.groups import PLATONIC_GROUPS
 
 
 class PlatonicConv(nn.Module):

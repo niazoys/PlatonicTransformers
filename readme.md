@@ -15,7 +15,7 @@ Welcome to the Platonic Transformer project, where geometric group theory meets 
 
 
 <p align="center">
-  <img src="models/platoformer-mainfig-vfinal-1.png" alt="Platonic Transformer Architecture" width="800"/>
+  <img src="platonic_transformers/models/platoformer-mainfig-vfinal-1.png" alt="Platonic Transformer Architecture" width="800"/>
 </p>
 
 
@@ -72,16 +72,17 @@ python meta_main.py omol --predict_forces --force_weight 100
 │   ├── main_cifar10.py
 │   ├── main_omol.py
 │   └── main_qm9_regr.py
-├── models/
-│   └── platoformer/         # Platonic Transformer building blocks
-│       ├── block.py         # Core PlatonicBlock (attention + feedforward)
-│       ├── conv.py          # Group convolution utilities
-│       ├── groups.py        # Symmetry group definitions for Platonic solids
-│       ├── io.py            # Lifting, pooling, dense/sparse utilities
-│       ├── linear.py        # Equivariant linear projections
-│       └── platoformer.py   # Full PlatonicTransformer module
-├── datasets/                # Dataset loaders for supported benchmarks
-├── utils/                   # Config loader and helper utilities
+├── platonic_transformers/
+│   ├── datasets/            # Dataset loaders for supported benchmarks
+│   ├── models/              # Platonic Transformer building blocks
+│   │   ├── block.py         # Core PlatonicBlock (attention + feedforward)
+│   │   ├── conv.py          # Group convolution utilities
+│   │   ├── groups.py        # Symmetry group definitions for Platonic solids
+│   │   ├── io.py            # Lifting, pooling, dense/sparse utilities
+│   │   ├── linear.py        # Equivariant linear projections
+│   │   └── platoformer.py   # Full PlatonicTransformer module
+│   └── utils                # Config loader and helper utilities
+├── pyproject.toml           # Project configuration file
 ├── requirements.txt         # Python dependencies
 ├── setup.sh                 # Environment setup script
 ```
@@ -198,7 +199,7 @@ python mains/main_omol.py --predict_forces --force_weight 100
 
 ## 🧠 Model Architecture
 
-**Platonic Transformers** leverage the rotational symmetries of Platonic solids to enforce SE(3)-equivariance in attention mechanisms. The architecture is implemented in `models/platoformer/`.
+**Platonic Transformers** leverage the rotational symmetries of Platonic solids to enforce SE(3)-equivariance in attention mechanisms. The architecture is implemented in `platonic_transformers/models/platoformer/`.
 
 ### Core Components
 

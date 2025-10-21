@@ -7,7 +7,7 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 from ase.neighborlist import neighbor_list
 from mendeleev import element
-from .k_hot_encoding import KHOT_EMBEDDINGS  # This was from fairchem repo.    
+from platonic_transformers.datasets.k_hot_encoding import KHOT_EMBEDDINGS  # This was from fairchem repo.    
 import pickle
 import threading
 

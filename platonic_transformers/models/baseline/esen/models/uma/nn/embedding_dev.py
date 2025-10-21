@@ -12,7 +12,7 @@ import copy
 import torch
 import torch.nn as nn
 
-from .radial import PolynomialEnvelope, RadialMLP
+from platonic_transformers.models.baseline.esen.models.uma.nn.radial import PolynomialEnvelope, RadialMLP
 
 
 class EdgeDegreeEmbedding(torch.nn.Module):

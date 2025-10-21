@@ -18,32 +18,32 @@ from fairchem.core.common import gp_utils
 from fairchem.core.common.distutils import get_device_for_local_rank
 from fairchem.core.common.registry import registry
 from fairchem.core.common.utils import conditional_grad
-from models.baseline.esen.graph.compute import generate_graph
-from models.baseline.esen.models.base import HeadInterface
-from models.baseline.esen.models.uma.common.rotation import (
+from platonic_transformers.models.baseline.esen.graph.compute import generate_graph
+from platonic_transformers.models.baseline.esen.models.base import HeadInterface
+from platonic_transformers.models.baseline.esen.models.uma.common.rotation import (
     init_edge_rot_mat,
     rotation_to_wigner,
 )
-from models.baseline.esen.models.uma.common.rotation_cuda_graph import RotMatWignerCudaGraph
-from models.baseline.esen.models.uma.common.so3 import CoefficientMapping, SO3_Grid
-from models.baseline.esen.models.uma.nn.embedding_dev import (
+from platonic_transformers.models.baseline.esen.models.uma.common.rotation_cuda_graph import RotMatWignerCudaGraph
+from platonic_transformers.models.baseline.esen.models.uma.common.so3 import CoefficientMapping, SO3_Grid
+from platonic_transformers.models.baseline.esen.models.uma.nn.embedding_dev import (
     ChgSpinEmbedding,
     DatasetEmbedding,
     EdgeDegreeEmbedding,
 )
-from models.baseline.esen.models.uma.nn.layer_norm import (
+from platonic_transformers.models.baseline.esen.models.uma.nn.layer_norm import (
     EquivariantLayerNormArray,
     EquivariantLayerNormArraySphericalHarmonics,
     EquivariantRMSNormArraySphericalHarmonics,
     EquivariantRMSNormArraySphericalHarmonicsV2,
     get_normalization_layer,
 )
-from models.baseline.esen.models.uma.nn.mole_utils import MOLEInterface
-from models.baseline.esen.models.uma.nn.radial import GaussianSmearing
-from models.baseline.esen.models.uma.nn.so3_layers import SO3_Linear
-from models.baseline.esen.models.utils.irreps import cg_change_mat, irreps_sum
+from platonic_transformers.models.baseline.esen.models.uma.nn.mole_utils import MOLEInterface
+from platonic_transformers.models.baseline.esen.models.uma.nn.radial import GaussianSmearing
+from platonic_transformers.models.baseline.esen.models.uma.nn.so3_layers import SO3_Linear
+from platonic_transformers.models.baseline.esen.models.utils.irreps import cg_change_mat, irreps_sum
 
-from .escn_md_block import eSCNMD_Block
+from platonic_transformers.models.baseline.esen.models.uma.escn_md_block import eSCNMD_Block
 
 ESCNMD_DEFAULT_EDGE_CHUNK_SIZE = 1024 * 128
 
