@@ -44,6 +44,7 @@ training:
   epochs: 500
   batch_size: 256
   loss_fn: "bce"  # Options: "cross_entropy", "bce"
+  gradient_clip_val: 0.5
   
   # Data augmentation
   train_augm: false  # Rotation augmentation on point cloud
