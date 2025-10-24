@@ -1,23 +1,13 @@
+import gc
 import math
 import numbers
 import random
 from typing import Any, Dict, Iterable, List, Optional, Tuple, Union
 
 import numpy as np
-import pytorch_lightning as pl
 import torch
-from torch.optim import Optimizer
 from torch_geometric.data import Data
 from torch_geometric.transforms import BaseTransform
-
-# Callbacks are now in utils.callbacks
-from utils.callbacks import (
-    MemoryMonitorCallback,
-    NaNDetectorCallback,
-    StopOnPersistentDivergence,
-    TimerCallback,
-    TrainingTimerCallback,
-)
 
 
 def run_gc() -> None:

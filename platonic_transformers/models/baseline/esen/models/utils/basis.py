@@ -15,7 +15,7 @@ import torch
 import torch.nn as nn
 from scipy.special import sph_harm
 
-from .activations import Act
+from platonic_transformers.models.baseline.esen.models.utils.activations import Act
 
 
 class Sine(nn.Module):

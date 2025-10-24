@@ -2,9 +2,9 @@ import torch
 import torch.nn as nn
 import math
 from torch import Tensor
+
 # This assumes the PLATONIC_GROUPS dictionary from the previous problem is available.
-# You might need to adjust the import path based on your project structure.
-from .groups import PLATONIC_GROUPS
+from platonic_transformers.models.platoformer.groups import PLATONIC_GROUPS
 
 
 class PlatonicRoPE(nn.Module):

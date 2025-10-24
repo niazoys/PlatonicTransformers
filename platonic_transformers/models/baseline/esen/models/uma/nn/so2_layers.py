@@ -14,7 +14,7 @@ import torch
 import torch.nn as nn
 from torch.nn import Linear
 
-from .radial import RadialMLP
+from platonic_transformers.models.baseline.esen.models.uma.nn.radial import RadialMLP
 
 
 class SO2_m_Conv(torch.nn.Module):

@@ -14,17 +14,17 @@ import torch.nn as nn
 from torch.profiler import record_function
 
 from fairchem.core.common import gp_utils
-from models.baseline.esen.models.uma.nn.activation import (
+from platonic_transformers.models.baseline.esen.models.uma.nn.activation import (
     GateActivation,
     SeparableS2Activation_M,
 )
-from models.baseline.esen.models.uma.nn.layer_norm import (
+from platonic_transformers.models.baseline.esen.models.uma.nn.layer_norm import (
     get_normalization_layer,
 )
-from models.baseline.esen.models.uma.nn.mole import MOLE
-from models.baseline.esen.models.uma.nn.radial import PolynomialEnvelope
-from models.baseline.esen.models.uma.nn.so2_layers import SO2_Convolution
-from models.baseline.esen.models.uma.nn.so3_layers import SO3_Linear
+from platonic_transformers.models.baseline.esen.models.uma.nn.mole import MOLE
+from platonic_transformers.models.baseline.esen.models.uma.nn.radial import PolynomialEnvelope
+from platonic_transformers.models.baseline.esen.models.uma.nn.so2_layers import SO2_Convolution
+from platonic_transformers.models.baseline.esen.models.uma.nn.so3_layers import SO3_Linear
 
 
 def set_mole_ac_start_index(module: nn.Module, index: int) -> None:

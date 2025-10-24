@@ -4,10 +4,9 @@ from torch import Tensor
 from typing import Optional, Callable
 import torch.nn.functional as F
 
-# Assumes these modules are in your project structure
-from .conv import PlatonicConv
-from .linear import PlatonicLinear
-from .groups import PLATONIC_GROUPS
+from platonic_transformers.models.platoformer.conv import PlatonicConv
+from platonic_transformers.models.platoformer.linear import PlatonicLinear
+from platonic_transformers.models.platoformer.groups import PLATONIC_GROUPS
 
 
 def drop_path(x, drop_prob: float = 0., training: bool = False, scale_by_keep: bool = True):

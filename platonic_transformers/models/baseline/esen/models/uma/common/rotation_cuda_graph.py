@@ -13,7 +13,7 @@ import math
 import torch
 from e3nn import o3
 
-from models.baseline.esen.models.uma.common.rotation import wigner_D
+from platonic_transformers.models.baseline.esen.models.uma.common.rotation import wigner_D
 
 YTOL = 0.999999
 
