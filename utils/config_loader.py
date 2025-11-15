@@ -184,6 +184,8 @@ def parse_simple_overrides(
     If a config is provided, automatically finds where parameters live.
     Supports both flat names (--batch_size) and explicit paths (--training.batch_size).
     
+    **This version is patched to correctly handle both '--key=value' and '--key value' formats.**
+    
     Args:
         unknown_args: List of unparsed command-line arguments.
         config: Optional ConfigDict to search for parameter locations.
@@ -192,7 +194,7 @@ def parse_simple_overrides(
         Nested dictionary with inferred config paths.
     
     Example:
-        parse_simple_overrides(['--batch_size', '128', '--lr', '1e-3'])
+        parse_simple_overrides(['--batch_size', '128', '--lr=1e-3'])
         # Automatically finds batch_size in training.batch_size and lr in optimizer.lr
     """
     overrides = {}
@@ -208,43 +210,56 @@ def parse_simple_overrides(
         
         # Handle flags (--flag or -flag)
         if arg.startswith('-'):
-            flag_name = arg.lstrip('-')
             
-            # Check if this is already a dotted path (e.g., --training.batch_size)
-            if '.' in flag_name:
-                # Explicit path provided - use it directly
-                config_path = flag_name
-                
-                # Check if this is a boolean flag (no value follows)
-                if i + 1 >= len(unknown_args) or unknown_args[i + 1].startswith('-'):
-                    _set_nested_value(overrides, config_path, True)
-                    i += 1
-                else:
-                    value_str = unknown_args[i + 1]
-                    value = _parse_value(value_str)
-                    _set_nested_value(overrides, config_path, value)
-                    i += 2
+            flag_name = ''
+            value_str = None
+            is_bool_flag = False
+
+            # --- START PATCH ---
+            # Check for '--key=value' format
+            if '=' in arg:
+                parts = arg.split('=', 1)
+                flag_name = parts[0].lstrip('-')
+                value_str = parts[1]
+                i += 1 # Consumed one arg
+            
+            # Handle '--key value' or '--key' (boolean) format
             else:
-                # Simple flag name - need to infer path
+                flag_name = arg.lstrip('-')
                 # Check if this is a boolean flag (no value follows)
                 if i + 1 >= len(unknown_args) or unknown_args[i + 1].startswith('-'):
-                    # Boolean flag (store as True)
-                    config_path = param_to_path.get(flag_name, flag_name)
-                    _set_nested_value(overrides, config_path, True)
-                    i += 1
+                    is_bool_flag = True
+                    i += 1 # Consumed one arg (the flag)
                 else:
                     # Flag with value
                     value_str = unknown_args[i + 1]
-                    config_path = param_to_path.get(flag_name, flag_name)
-                    
-                    # Warn if we couldn't find this parameter in the config
-                    if config is not None and flag_name not in param_to_path:
-                        print(f"Warning: Parameter '{flag_name}' not found in config. "
-                              f"Use explicit path like --section.{flag_name} if needed.")
-                    
+                    i += 2 # Consumed two args (flag and value)
+            # --- END PATCH ---
+
+            # Now, process the extracted flag_name and value
+            
+            # Check if this is already a dotted path (e.g., --training.batch_size)
+            if '.' in flag_name:
+                config_path = flag_name
+                if is_bool_flag:
+                    _set_nested_value(overrides, config_path, True)
+                else:
                     value = _parse_value(value_str)
                     _set_nested_value(overrides, config_path, value)
-                    i += 2
+            else:
+                # Simple flag name - need to infer path
+                config_path = param_to_path.get(flag_name, flag_name)
+                
+                # Warn if we couldn't find this parameter in the config
+                if config is not None and flag_name not in param_to_path:
+                    print(f"Warning: Parameter '{flag_name}' not found in config. "
+                          f"Use explicit path like --section.{flag_name} if needed.")
+                
+                if is_bool_flag:
+                    _set_nested_value(overrides, config_path, True)
+                else:
+                    value = _parse_value(value_str)
+                    _set_nested_value(overrides, config_path, value)
         else:
             # Positional argument (ignore)
             i += 1
