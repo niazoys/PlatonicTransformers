@@ -15,7 +15,7 @@ model:
   name: "platoformer"
   hidden_dim: 1152
   num_layers: 14
-  num_heads: 48
+  num_heads: 72
   solid_name: "octahedron"  # Options: tetrahedron, trivial_3, octahedron, icosahedron
   spatial_dim: 3
   dense_mode: false
