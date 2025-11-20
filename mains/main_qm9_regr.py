@@ -267,28 +267,42 @@ def load_data(config: ml_collections.ConfigDict) -> Tuple[DataLoader, DataLoader
     # Load dataset
     dataset = QM9(root=config.dataset.data_dir)
     
+    # Select target property, with a preference for '_atom' versions if available.
+    all_targets = [
+        'mu', 'alpha', 'homo', 'lumo', 'gap', 'r2', 'zpve', 'U0', 'U', 'H', 'G', 'Cv', 
+        'U0_atom', 'U_atom', 'H_atom', 'G_atom', 'A', 'B', 'C'
+    ]
+    target_map = {name: i for i, name in enumerate(all_targets)}
+
+    target_name = config.dataset.target
+    atom_version = f"{target_name}_atom"
+    if atom_version in target_map:
+        print(f"Redirecting target '{target_name}' to '{atom_version}'.")
+        target_name = atom_version
+        
+    try:
+        target_idx = target_map[target_name]
+    except KeyError:
+        raise ValueError(f"Target '{target_name}' not found in QM9 targets: {all_targets}")
+    
+    # Set the target for the entire dataset *before* splitting
+    dataset.data.y = dataset.data.y[:, target_idx]
+
     # Create train/val/test split (same as DimeNet)
     random_state = np.random.RandomState(seed=42)
     perm = torch.from_numpy(random_state.permutation(np.arange(130831)))
     train_idx, val_idx, test_idx = perm[:110000], perm[110000:120000], perm[120000:]
     datasets = {'train': dataset[train_idx], 'val': dataset[val_idx], 'test': dataset[test_idx]}
     
-    # Select target property
-    targets = ['mu', 'alpha', 'homo', 'lumo', 'gap', 'r2', 'zpve', 'U0',
-               'U', 'H', 'G', 'Cv', 'U0_atom', 'U_atom', 'H_atom', 'G_atom', 'A', 'B', 'C']
-    idx = torch.tensor([0, 1, 2, 3, 4, 5, 6, 12, 13, 14, 15, 11, 12, 13, 14, 15])
-    dataset.data.y = dataset.data.y[:, idx]
-    dataset.data.y = dataset.data.y[:, targets.index(config.dataset.target)]
-
     # Create dataloaders
     dataloaders = {
         split: DataLoader(
-            dataset,
+            split_dataset,
             batch_size=config.training.batch_size,
             shuffle=(split == 'train'),
             num_workers=config.system.num_workers,
         )
-        for split, dataset in datasets.items()
+        for split, split_dataset in datasets.items()
     }
     
     return dataloaders['train'], dataloaders['val'], dataloaders['test']
@@ -379,4 +393,3 @@ if __name__ == "__main__":
     
     # Run training
     main(config)
-    
