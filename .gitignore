@@ -1,0 +1,31 @@
+# Python artifacts
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+build/
+dist/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+.env
+.venv
+env/
+venv/
+ENV/
+
+# Wandb logs and run files
+wandb/
+**/wandb/
+mains/logs/
+sweeps/wandb/
+run-*.wandb
+
+# Processed data
+data/qm9/
+
+# Notebook checkpoints
+.ipynb_checkpoints
