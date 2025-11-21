@@ -102,7 +102,7 @@ class PlatonicRoPE(nn.Module):
             raise ValueError(f"Input shape {x.shape} does not match expected shape (..., {self.num_G}, {self.num_heads}, {self.head_dim}).")
         
         # 2. --- Compute Rotated frequencies ---
-        freqs_rotated = torch.einsum('ged, hfe -> ghfd', self.group_elements, self.freqs)
+        freqs_rotated = torch.einsum('gde, hfe -> ghfd', self.group_elements, self.freqs)
 
         # Compute rotation angles for each rotated position and each base head.
         angles = torch.einsum('...d, ghfd -> ...ghf', pos, freqs_rotated)

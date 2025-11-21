@@ -165,13 +165,13 @@ def _generate_dihedral_elements(n: int) -> Tensor:
     reflections = rotations @ reflection
     return torch.cat([rotations, reflections], dim=0)
 
-def _get_tetrahedral_elements() -> Tensor:
+def _get_tetrahedral_elements(dtype=torch.float32) -> Tensor:
     """Returns the 12 rotation matrices of the Tetrahedral group."""
     return torch.tensor([
         [[1,0,0],[0,1,0],[0,0,1]],[[1,0,0],[0,-1,0],[0,0,-1]],[[-1,0,0],[0,1,0],[0,0,-1]],[[-1,0,0],[0,-1,0],[0,0,1]],
         [[0,0,1],[1,0,0],[0,1,0]],[[0,1,0],[0,0,1],[1,0,0]],[[0,0,-1],[1,0,0],[0,-1,0]],[[0,-1,0],[0,0,-1],[1,0,0]],
         [[0,0,1],[-1,0,0],[0,-1,0]],[[0,-1,0],[0,0,1],[-1,0,0]],[[0,0,-1],[-1,0,0],[0,1,0]],[[0,1,0],[0,0,-1],[-1,0,0]],
-    ], dtype=torch.float32)
+    ], dtype=dtype)
 
 def _get_octahedral_elements() -> Tensor:
     """Returns the 24 rotation matrices of the Octahedral group."""
@@ -186,30 +186,42 @@ def _generate_icosahedral_elements() -> Tensor:
     Generates the 60 rotation matrices of the Icosahedral group programmatically
     using coset decomposition of its tetrahedral subgroup.
     """
+    # FORCE FLOAT64 for generation to avoid error accumulation
+    gen_dtype = torch.float64
+
     def _rodrigues_rotation(axis: torch.Tensor, angle: float) -> torch.Tensor:
         """Generates a rotation matrix using Rodrigues' rotation formula."""
         axis = axis / torch.linalg.norm(axis)
+        # Explicitly use gen_dtype for intermediate tensors
         K = torch.tensor([[0, -axis[2], axis[1]],
                           [axis[2], 0, -axis[0]],
-                          [-axis[1], axis[0], 0]], dtype=torch.float32)
-        I = torch.eye(3, dtype=torch.float32)
+                          [-axis[1], axis[0], 0]], dtype=gen_dtype)
+        I = torch.eye(3, dtype=gen_dtype)
         R = I + math.sin(angle) * K + (1 - math.cos(angle)) * (K @ K)
         return R
 
-    T = _get_tetrahedral_elements()
+    # Get base elements in high precision
+    T = _get_tetrahedral_elements(dtype=gen_dtype)
+    
     phi = (1 + math.sqrt(5)) / 2.0
-    c = _rodrigues_rotation(torch.tensor([phi, 1.0, 0.0]), 2 * math.pi / 5)
-    c_powers = [torch.eye(3, dtype=torch.float32)]
+    c = _rodrigues_rotation(torch.tensor([phi, 1.0, 0.0], dtype=gen_dtype), 2 * math.pi / 5)
+    
+    c_powers = [torch.eye(3, dtype=gen_dtype)]
     for _ in range(4): c_powers.append(c_powers[-1] @ c)
+    
     icosahedral_elements = torch.stack([t @ c_pow for t in T for c_pow in c_powers])
+    
     unique_elements = []
     atol = 1e-5
     for g in icosahedral_elements:
         if all(not torch.allclose(g, existing_g, atol=atol) for existing_g in unique_elements):
             unique_elements.append(g)
+            
     if len(unique_elements) != 60:
         raise RuntimeError(f"Failed to generate Icosahedral group. Expected 60 elements, got {len(unique_elements)}")
-    return torch.stack(unique_elements)
+        
+    # Convert back to standard float32 for storage (optional, usually handled by class)
+    return torch.stack(unique_elements).to(torch.float32)
 
 def _get_axis_aligned_reflection_elements() -> Tensor:
     """

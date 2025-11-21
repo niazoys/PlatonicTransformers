@@ -11,7 +11,8 @@ def lift_scalars(x, group):
     
 def lift_vectors(x, group):
     frames = group.elements.type_as(x)  # (G, 3, 3)
-    return torch.einsum('gij,...cj->...gci', frames, x).flatten(-2, -1)  # (..., C, 3) -> (..., G, C, 3) -> (..., G , C * 3)
+    return torch.einsum('gji,...cj->...gci', frames, x).flatten(-2, -1)
+
 
 def readout_scalars(x, group):
     return x.mean(dim=-2)  # (..., G * C) -> (..., G, C) -> (..., C)
@@ -19,7 +20,7 @@ def readout_scalars(x, group):
 def readout_vectors(x, group):
     x = x.unflatten(-1, (-1, group.dim))  # (..., G * C) -> (..., G, C, 3)
     frames = group.elements.type_as(x)  # (G, 3, 3)
-    return torch.einsum('gji,...gcj->...ci', frames, x) / group.G  # frame transposed, result: (..., c, 3)
+    return torch.einsum('gij,...gcj->...ci', frames, x) / group.G  # frame transposed, result: (..., c, 3)
 
 def lift(scalars, vectors, group):
     x_list = []
