@@ -44,6 +44,12 @@ Welcome to the Platonic Transformer project, where geometric group theory meets 
 
 ## 🚀 Quick Start
 
+With `pip` (to use in other repositories):
+```bash
+pip install "platonic_transformers @ git+https://github.com/niazoys/PlatonicTransformer.git"
+```
+
+In a dedicated environment (to run the paper's experiments):
 ```bash
 # Clone and setup
 git clone https://github.com/niazoys/PlatonicTransformer.git
@@ -61,6 +67,8 @@ python meta_main.py qm9_regr --target mu --batch_size 96
 # Train on OMol energy/force regression (loads configs/omol.yaml)
 python meta_main.py omol --predict_forces --force_weight 100
 ```
+
+> **Note:** The rest of this README will provide instructions for running experiments within a dedicated environment.
 
 ## 📂 Repository Structure
 ```
@@ -299,5 +307,4 @@ For questions or issues:
 
 
 <!-- *🚀🚀🚀Happy Experimenting! 🚀🚀🚀* -->
-
 
