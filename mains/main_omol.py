@@ -8,25 +8,22 @@ if REPO_ROOT not in sys.path:
     sys.path.insert(0, REPO_ROOT)
 
 import ml_collections
-import numpy as np
 import pytorch_lightning as pl
 import torch
 import torchmetrics
 from pytorch_lightning.callbacks import Timer
 from pytorch_lightning.strategies import DDPStrategy
 from torch_geometric.data import Data
-from torch_geometric.loader import DataLoader
 
-from datasets.omol import get_omol_loaders
-from models.platoformer.platoformer import PlatonicTransformer
-from models.platoformer.groups import PLATONIC_GROUPS
-from utils.config_loader import (
+from platonic_transformers.datasets.omol import get_omol_loaders
+from platonic_transformers.models.platoformer.platoformer import PlatonicTransformer
+from platonic_transformers.models.platoformer.groups import PLATONIC_GROUPS
+from platonic_transformers.utils.config_loader import (
     get_arg_parser,
     load_with_defaults,
-    print_config
 )
-from utils.utils import CosineWarmupScheduler, RandomSOd
-from utils.callbacks import MemoryMonitorCallback, TimerCallback
+from platonic_transformers.utils.utils import CosineWarmupScheduler, RandomSOd
+from platonic_transformers.utils.callbacks import MemoryMonitorCallback, TimerCallback
 
 # Performance optimizations
 torch.set_float32_matmul_precision('medium')
