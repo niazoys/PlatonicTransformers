@@ -3,6 +3,7 @@ import math
 import numbers
 import random
 from typing import Any, Dict, Iterable, List, Optional, Tuple, Union
+import gc
 
 import numpy as np
 import torch

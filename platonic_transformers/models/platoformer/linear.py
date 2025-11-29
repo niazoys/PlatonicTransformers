@@ -74,7 +74,7 @@ class PlatonicLinear(nn.Module):
         g_indices = torch.arange(self.G, device=device).view(1, self.G)
 
         inv_g_indices = self.inverse_indices[g_indices]
-        kernel_group_idx = self.cayley_table[h_indices, inv_g_indices]
+        kernel_group_idx = self.cayley_table[inv_g_indices, h_indices]
         
         expanded_kernel = self.kernel[kernel_group_idx]
         weight = expanded_kernel.permute(0, 2, 1, 3).reshape(self.out_features, self.in_features)
@@ -132,12 +132,12 @@ def run_equivariance_test(solid_name: str):
             break
 
         input_unflattened = input_signal.view(B, G, I)
-        transformed_unflattened = input_unflattened[:, :]
+        transformed_unflattened = input_unflattened[:, transform_indices]
         transformed_input = transformed_unflattened.reshape(B, in_feats)
         output_lhs = layer(transformed_input)
 
         original_output_unflattened = original_output.view(B, G, O)
-        transformed_output_unflattened = original_output_unflattened[:, :]
+        transformed_output_unflattened = original_output_unflattened[:, transform_indices]
         output_rhs = transformed_output_unflattened.reshape(B, out_feats)
 
         if not torch.allclose(output_lhs, output_rhs, atol=1e-5):

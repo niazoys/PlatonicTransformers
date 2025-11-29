@@ -102,7 +102,7 @@ class PlatonicRoPE(nn.Module):
             raise ValueError(f"Input shape {x.shape} does not match expected shape (..., {self.num_G}, {self.num_heads}, {self.head_dim}).")
         
         # 2. --- Compute Rotated frequencies ---
-        freqs_rotated = torch.einsum('ged, hfe -> ghfd', self.group_elements, self.freqs)
+        freqs_rotated = torch.einsum('gde, hfe -> ghfd', self.group_elements, self.freqs)
 
         # Compute rotation angles for each rotated position and each base head.
         angles = torch.einsum('...d, ghfd -> ...ghf', pos, freqs_rotated)
@@ -189,30 +189,30 @@ class PlatonicRoPE(nn.Module):
         return final_freqs
 
     def _create_spiral_frequencies_2d(self) -> Tensor:
-            """Generates 2D frequency vectors using a golden angle spiral."""
-            indices = torch.arange(0, self.num_pairs, dtype=torch.float32)
-            
-            # Per-head phase offsets
-            head_phases = torch.linspace(0, 2 * math.pi, self.num_heads + 1)[:-1].unsqueeze(1)
-            
-            # Golden angle for uniform angular distribution
-            golden_angle = math.pi * (3. - math.sqrt(5.))
-            
-            # Base theta and radius
-            # Radius scales with sqrt(index) for uniform area coverage
-            base_theta = (indices * golden_angle).unsqueeze(0)
-            normalized_indices = (indices + 1) / self.num_pairs # Normalize to 1, zero freq not included
-            radius = torch.sqrt(normalized_indices).unsqueeze(0) * self.freq_sigma
-                                                    
-            # Add head phases for per-head variation
-            theta = base_theta + head_phases
-            
-            # Convert from polar to Cartesian coordinates
-            x = radius * torch.cos(theta)
-            y = radius * torch.sin(theta)
-            
-            # Stack and scale by max_freq
-            # Shape: [num_heads, num_pairs, 2]
-            freq_vectors = torch.stack([x, y], dim=-1)
-            
-            return freq_vectors
+        """Generates 2D frequency vectors using a golden angle spiral."""
+        indices = torch.arange(0, self.num_pairs, dtype=torch.float32)
+        
+        # Per-head phase offsets
+        head_phases = torch.linspace(0, 2 * math.pi, self.num_heads + 1)[:-1].unsqueeze(1)
+        
+        # Golden angle for uniform angular distribution
+        golden_angle = math.pi * (3. - math.sqrt(5.))
+        
+        # Base theta and radius
+        # Radius scales with sqrt(index) for uniform area coverage
+        base_theta = (indices * golden_angle).unsqueeze(0)
+        normalized_indices = (indices + 1) / self.num_pairs # Normalize to 1, zero freq not included
+        radius = torch.sqrt(normalized_indices).unsqueeze(0) * self.freq_sigma
+                                                
+        # Add head phases for per-head variation
+        theta = base_theta + head_phases
+        
+        # Convert from polar to Cartesian coordinates
+        x = radius * torch.cos(theta)
+        y = radius * torch.sin(theta)
+        
+        # Stack and scale by max_freq
+        # Shape: [num_heads, num_pairs, 2]
+        freq_vectors = torch.stack([x, y], dim=-1)
+        
+        return freq_vectors

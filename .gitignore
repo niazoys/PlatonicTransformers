@@ -101,6 +101,18 @@ celerybeat.pid
 # SageMath parsed files
 *.sage.py
 
+# Python artifacts
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+build/
+dist/
+*.egg-info/
+.installed.cfg
+*.egg
+
 # Environments
 .venv
 env/
@@ -143,3 +155,16 @@ dmypy.json
 *.h5
 *.tar
 *.tar.gz
+
+# Wandb logs and run files
+wandb/
+**/wandb/
+mains/logs/
+sweeps/wandb/
+run-*.wandb
+
+# Processed data
+data/qm9/
+
+# Notebook checkpoints
+.ipynb_checkpoints
