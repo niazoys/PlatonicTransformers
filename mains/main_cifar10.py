@@ -24,15 +24,15 @@ except ImportError:
     Lamb = None
 
 # Import model and utilities
-from utils.config_loader import (
+from platonic_transformers.utils.config_loader import (
     get_arg_parser,
     load_with_defaults,
     print_config
 )
-from models.platoformer.platoformer import PlatonicTransformer
-from models.platoformer.groups import PLATONIC_GROUPS
-from utils.utils import CosineWarmupScheduler, RandomSOd
-from utils.callbacks import TimerCallback
+from platonic_transformers.models.platoformer.platoformer import PlatonicTransformer
+from platonic_transformers.models.platoformer.groups import PLATONIC_GROUPS
+from platonic_transformers.utils.utils import CosineWarmupScheduler, RandomSOd
+from platonic_transformers.utils.callbacks import TimerCallback
 
 # Allow CIFAR-10 download on servers with SSL issues
 ssl._create_default_https_context = ssl._create_unverified_context

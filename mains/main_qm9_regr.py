@@ -16,17 +16,17 @@ from torch_geometric.data import Data
 from torch_geometric.datasets import QM9
 from torch_geometric.loader import DataLoader
 
-from datasets.k_hot_encoding import KHOT_EMBEDDINGS
-from models.platoformer.platoformer import PlatonicTransformer
-from models.platoformer.groups import PLATONIC_GROUPS
-from models.platoformer.utils import scatter_add
-from utils.config_loader import (
+from platonic_transformers.datasets.k_hot_encoding import KHOT_EMBEDDINGS
+from platonic_transformers.models.platoformer.platoformer import PlatonicTransformer
+from platonic_transformers.models.platoformer.groups import PLATONIC_GROUPS
+from platonic_transformers.models.platoformer.utils import scatter_add
+from platonic_transformers.utils.config_loader import (
     get_arg_parser,
     load_with_defaults,
     print_config
 )
-from utils.utils import CosineWarmupScheduler, RandomSOd
-from utils.callbacks import StopOnPersistentDivergence, TimerCallback
+from platonic_transformers.utils.utils import CosineWarmupScheduler, RandomSOd
+from platonic_transformers.utils.callbacks import StopOnPersistentDivergence, TimerCallback
 
 # Performance optimizations
 torch.set_float32_matmul_precision('high')
