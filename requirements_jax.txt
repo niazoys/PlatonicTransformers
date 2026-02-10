@@ -1,0 +1,29 @@
+# JAX Requirements for Platonic Transformer
+# Install these in addition to the base requirements.txt
+
+# -- JAX Installation --
+# For CPU:
+# jax[cpu]
+
+# For GPU (CUDA 12):
+jax[cuda12]
+# Alternative: jax[cuda12_pip] for pip-only installation
+
+# For TPU:
+# jax[tpu]
+
+# -- Flax and Optax (JAX Neural Network Libraries) --
+flax>=0.8.0
+optax>=0.2.0
+
+# -- Additional JAX Utilities --
+# jraph  # For graph neural networks in JAX (optional)
+# chex   # JAX testing utilities (optional)
+
+# -- Shared Dependencies (should already be in requirements.txt) --
+numpy
+wandb
+ml-collections
+pyyaml
+tqdm
+torch_geometric  # For data loading only
