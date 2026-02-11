@@ -5,7 +5,7 @@ seed: 42
 # Dataset configuration
 dataset:
   name: "qm9"
-  data_dir: "./data/qm9"
+  data_dir: "~/scratch/datasets/qm9"
   target: "mu"  # Options: mu, alpha, homo, lumo, gap, r2, zpve, U0, U, H, G, Cv, U0_atom, U_atom, H_atom, G_atom, A, B, C
   num_splits: [110000, 10000, 10831]  # train, val, test
   use_k_hot_encoding: true  # Use k-hot embedding for atoms

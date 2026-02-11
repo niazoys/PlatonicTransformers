@@ -24,9 +24,12 @@ from tqdm import tqdm
 import ml_collections
 import wandb
 
-# For data loading, we'll reuse PyTorch's DataLoader
-from torch_geometric.datasets import QM9
-from torch_geometric.loader import DataLoader as PyGDataLoader
+# JAX-native QM9 dataset (no PyTorch dependencies)
+from platonic_transformers.datasets.qm9_jax import (
+    QM9DatasetJax,
+    DataLoaderJax,
+    Batch
+)
 
 from platonic_transformers.datasets.k_hot_encoding import KHOT_EMBEDDINGS
 from platonic_transformers.models.platoformer_jax import (
@@ -110,12 +113,12 @@ def apply_khot_encoding(x: jnp.ndarray, khot_table: jnp.ndarray) -> jnp.ndarray:
     return jnp.concatenate([embeddings, x[:, -5:]], axis=-1)
 
 
-def pyg_batch_to_jax(batch, use_khot: bool, khot_table: Optional[jnp.ndarray] = None) -> Dict[str, jnp.ndarray]:
-    """Convert PyTorch Geometric batch to JAX arrays."""
-    x = jnp.array(batch.x.numpy())
-    pos = jnp.array(batch.pos.numpy())
-    batch_idx = jnp.array(batch.batch.numpy())
-    y = jnp.array(batch.y.numpy())
+def batch_to_jax(batch: Batch, use_khot: bool, khot_table: Optional[jnp.ndarray] = None) -> Dict[str, jnp.ndarray]:
+    """Convert Batch (numpy arrays) to JAX arrays."""
+    x = jnp.array(batch.x)
+    pos = jnp.array(batch.pos)
+    batch_idx = jnp.array(batch.batch)
+    y = jnp.array(batch.y)
     
     if use_khot and khot_table is not None:
         x = apply_khot_encoding(x, khot_table)
@@ -125,13 +128,12 @@ def pyg_batch_to_jax(batch, use_khot: bool, khot_table: Optional[jnp.ndarray] = 
         'pos': pos,
         'batch': batch_idx,
         'y': y,
+        'num_graphs': batch.num_graphs,  # Pass as concrete value before tracing
     }
 
 
-def center_positions(pos: jnp.ndarray, batch: jnp.ndarray) -> jnp.ndarray:
+def center_positions(pos: jnp.ndarray, batch: jnp.ndarray, num_graphs: int) -> jnp.ndarray:
     """Center positions per graph by subtracting mean."""
-    num_graphs = int(batch.max()) + 1
-    
     # Compute mean position per graph
     pos_sum = segment_sum(pos, batch, num_graphs)
     counts = segment_sum(jnp.ones((pos.shape[0], 1)), batch, num_graphs)
@@ -158,11 +160,10 @@ def random_rotation_matrix(rng: jax.random.PRNGKey) -> jnp.ndarray:
 def apply_rotation_augmentation(
     pos: jnp.ndarray, 
     batch: jnp.ndarray, 
-    rng: jax.random.PRNGKey
+    rng: jax.random.PRNGKey,
+    num_graphs: int
 ) -> jnp.ndarray:
     """Apply random rotation augmentation per graph."""
-    num_graphs = int(batch.max()) + 1
-    
     # Generate rotation matrices for each graph
     rngs = jax.random.split(rng, num_graphs)
     rotations = jax.vmap(random_rotation_matrix)(rngs)  # [num_graphs, 3, 3]
@@ -179,7 +180,8 @@ def compute_loss(
     model: PlatonicTransformer,
     train: bool = True,
     rng: Optional[jax.random.PRNGKey] = None,
-    train_augm: bool = False
+    train_augm: bool = False,
+    num_graphs: int = 1
 ) -> Tuple[jnp.ndarray, jnp.ndarray]:
     """Compute MAE loss for a batch."""
     x = batch_data['x']
@@ -188,11 +190,11 @@ def compute_loss(
     y = batch_data['y']
     
     # Center positions
-    pos = center_positions(pos, batch_idx)
+    pos = center_positions(pos, batch_idx, num_graphs)
     
     # Apply rotation augmentation if training
     if train and train_augm and rng is not None:
-        pos = apply_rotation_augmentation(pos, batch_idx, rng)
+        pos = apply_rotation_augmentation(pos, batch_idx, rng, num_graphs)
     
     # Forward pass
     pred, _ = model.apply(
@@ -217,18 +219,19 @@ def compute_loss(
     return loss, mae
 
 
-@partial(jax.pmap, axis_name='batch', static_broadcasted_argnums=(2, 4))
+@partial(jax.pmap, axis_name='batch', static_broadcasted_argnums=(2, 4, 5))
 def train_step(
     state: TrainState,
     batch_data: Dict[str, jnp.ndarray],
     model: PlatonicTransformer,
     rng: jax.random.PRNGKey,
-    train_augm: bool
+    train_augm: bool,
+    num_graphs: int
 ) -> Tuple[TrainState, jnp.ndarray, jnp.ndarray]:
     """Parallel training step."""
     
     def loss_fn(params):
-        return compute_loss(params, state, batch_data, model, train=True, rng=rng, train_augm=train_augm)
+        return compute_loss(params, state, batch_data, model, train=True, rng=rng, train_augm=train_augm, num_graphs=num_graphs)
     
     (loss, mae), grads = jax.value_and_grad(loss_fn, has_aux=True)(state.params)
     
@@ -240,21 +243,18 @@ def train_step(
     # Update parameters
     state = state.apply_gradients(grads=grads)
     
-    # Update RNG
-    new_rng = jax.random.split(rng)[0]
-    state = state.replace(rng=new_rng)
-    
     return state, loss, mae
 
 
-@partial(jax.pmap, axis_name='batch', static_broadcasted_argnums=(2,))
+@partial(jax.pmap, axis_name='batch', static_broadcasted_argnums=(2, 3))
 def eval_step(
     state: TrainState,
     batch_data: Dict[str, jnp.ndarray],
-    model: PlatonicTransformer
+    model: PlatonicTransformer,
+    num_graphs: int
 ) -> jnp.ndarray:
     """Parallel evaluation step."""
-    _, mae = compute_loss(state.params, state, batch_data, model, train=False)
+    _, mae = compute_loss(state.params, state, batch_data, model, train=False, num_graphs=num_graphs)
     mae = jax.lax.pmean(mae, axis_name='batch')
     return mae
 
@@ -315,14 +315,14 @@ def create_train_state(
     )
 
 
-def compute_dataset_statistics(dataloader: PyGDataLoader, target_idx: int) -> Tuple[float, float, float]:
+def compute_dataset_statistics(dataloader: DataLoaderJax, target_idx: int) -> Tuple[float, float, float]:
     """Compute mean, std, and avg_num_nodes from training data."""
     ys = []
     total_nodes = 0
     total_graphs = 0
     
     for batch in tqdm(dataloader, desc="Computing statistics"):
-        ys.append(batch.y.numpy())
+        ys.append(batch.y)
         total_nodes += batch.num_nodes
         total_graphs += batch.num_graphs
     
@@ -334,10 +334,8 @@ def compute_dataset_statistics(dataloader: PyGDataLoader, target_idx: int) -> Tu
     return shift, scale, avg_num_nodes
 
 
-def load_data(config: ml_collections.ConfigDict) -> Tuple[PyGDataLoader, PyGDataLoader, PyGDataLoader]:
-    """Load QM9 dataset with PyTorch Geometric."""
-    dataset = QM9(root=config.dataset.data_dir)
-    
+def load_data(config: ml_collections.ConfigDict) -> Tuple[DataLoaderJax, DataLoaderJax, DataLoaderJax, int]:
+    """Load QM9 dataset using JAX-native dataset class."""
     # Target selection
     all_targets = [
         'mu', 'alpha', 'homo', 'lumo', 'gap', 'r2', 'zpve', 'U0', 'U', 'H', 'G', 'Cv',
@@ -352,25 +350,23 @@ def load_data(config: ml_collections.ConfigDict) -> Tuple[PyGDataLoader, PyGData
         target_name = atom_version
     
     target_idx = target_map[target_name]
-    dataset.data.y = dataset.data.y[:, target_idx]
     
-    # Create splits
-    random_state = np.random.RandomState(seed=42)
-    perm = random_state.permutation(np.arange(130831))
-    train_idx, val_idx, test_idx = perm[:110000], perm[110000:120000], perm[120000:]
-    
+    # Load datasets with JAX-native dataset class
+    print ("[DEBUG] DATADIR:",config.dataset.data_dir)
     datasets = {
-        'train': dataset[train_idx.tolist()],
-        'val': dataset[val_idx.tolist()],
-        'test': dataset[test_idx.tolist()]
+        split: QM9DatasetJax(
+            root=config.dataset.data_dir,
+            target=target_name,
+            split=split
+        )
+        for split in ['train', 'val', 'test']
     }
     
     dataloaders = {
-        split: PyGDataLoader(
+        split: DataLoaderJax(
             split_dataset,
             batch_size=config.training.batch_size,
             shuffle=(split == 'train'),
-            num_workers=config.system.num_workers,
             drop_last=(split == 'train')  # Important for multi-GPU
         )
         for split, split_dataset in datasets.items()
@@ -393,12 +389,13 @@ def shard_batch(batch_data: Dict[str, jnp.ndarray], num_devices: int) -> Dict[st
             arr = jnp.concatenate([arr, jnp.zeros(pad_shape, dtype=arr.dtype)], axis=0)
         return arr.reshape(num_devices, -1, *arr.shape[1:])
     
-    return {k: shard_array(v) for k, v in batch_data.items()}
+    # num_graphs is handled separately as static arg, skip it here
+    return {k: shard_array(v) for k, v in batch_data.items() if k != 'num_graphs'}
 
 
 def train_epoch(
     state: TrainState,
-    train_loader: PyGDataLoader,
+    train_loader: DataLoaderJax,
     model: PlatonicTransformer,
     use_khot: bool,
     khot_table: jnp.ndarray,
@@ -412,16 +409,26 @@ def train_epoch(
     
     for batch in tqdm(train_loader, desc="Training", leave=False):
         # Convert to JAX
-        batch_data = pyg_batch_to_jax(batch, use_khot, khot_table)
+        batch_data = batch_to_jax(batch, use_khot, khot_table)
+        
+        # Extract num_graphs before sharding (it's a static value)
+        num_graphs = batch_data['num_graphs']
         
         # Shard across devices
         batch_data = shard_batch(batch_data, num_devices)
         
-        # Get RNG for this step
-        rng = jax.random.split(state.rng, num_devices)
+        # Get RNG for this step - unreplicate first since state.rng is replicated
+        rng_single = unreplicate(state.rng)
+        rng_keys = jax.random.split(rng_single, num_devices + 1)
+        # Use first key to update state for next iteration, rest for devices
+        next_rng = rng_keys[0]
+        rng = rng_keys[1:]  # Shape: (num_devices, 2)
         
         # Training step
-        state, loss, mae = train_step(state, batch_data, model, rng, train_augm)
+        state, loss, mae = train_step(state, batch_data, model, rng, train_augm, num_graphs)
+        
+        # Update state's rng for next batch
+        state = state.replace(rng=replicate(next_rng))
         
         total_loss += float(unreplicate(loss))
         total_mae += float(unreplicate(mae))
@@ -432,7 +439,7 @@ def train_epoch(
 
 def evaluate(
     state: TrainState,
-    dataloader: PyGDataLoader,
+    dataloader: DataLoaderJax,
     model: PlatonicTransformer,
     use_khot: bool,
     khot_table: jnp.ndarray,
@@ -444,10 +451,11 @@ def evaluate(
     num_batches = 0
     
     for batch in tqdm(dataloader, desc=desc, leave=False):
-        batch_data = pyg_batch_to_jax(batch, use_khot, khot_table)
+        batch_data = batch_to_jax(batch, use_khot, khot_table)
+        num_graphs = batch_data['num_graphs']
         batch_data = shard_batch(batch_data, num_devices)
         
-        mae = eval_step(state, batch_data, model)
+        mae = eval_step(state, batch_data, model, num_graphs)
         total_mae += float(unreplicate(mae))
         num_batches += 1
     
@@ -474,7 +482,8 @@ def main(config: ml_collections.ConfigDict) -> None:
     khot_table = create_khot_embedding_table() if config.dataset.use_k_hot_encoding else None
     
     # Compute dataset statistics
-    stats_file = os.path.join(config.dataset.data_dir, f"stats_{config.dataset.target}.npz")
+    data_dir = os.path.expanduser(config.dataset.data_dir)
+    stats_file = os.path.join(data_dir, f"stats_{config.dataset.target}.npz")
     if os.path.exists(stats_file):
         print(f"Loading statistics from {stats_file}")
         stats = np.load(stats_file)
@@ -499,7 +508,8 @@ def main(config: ml_collections.ConfigDict) -> None:
     if config.logging.enabled:
         wandb.init(
             project=config.logging.project_name + "-JAX",
-            config=config.to_dict()
+            config=config.to_dict(),
+            mode="offline"  # TODO: Remove for production
         )
     
     # Training loop

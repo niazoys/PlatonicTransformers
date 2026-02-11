@@ -169,3 +169,4 @@ data/qm9/
 
 # Notebook checkpoints
 .ipynb_checkpoints
+benchmarks/
