@@ -94,6 +94,7 @@ system:
   gpus: 1
   num_workers: 8
   enable_progress_bar: true
+  precision: "bf16-mixed"  # Options: "16-mixed", "bf16-mixed", "32"
 
 # Testing configuration
 testing:

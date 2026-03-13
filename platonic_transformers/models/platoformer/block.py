@@ -8,6 +8,12 @@ from platonic_transformers.models.platoformer.conv import PlatonicConv
 from platonic_transformers.models.platoformer.linear import PlatonicLinear
 from platonic_transformers.models.platoformer.groups import PLATONIC_GROUPS
 
+# Use apex FusedLayerNorm when available (fused CUDA kernel, ~2x faster)
+try:
+    from apex.normalization import FusedLayerNorm as LayerNorm
+except ImportError:
+    LayerNorm = nn.LayerNorm
+
 
 def drop_path(x, drop_prob: float = 0., training: bool = False, scale_by_keep: bool = True):
     """Drop paths (Stochastic Depth) per sample."""
@@ -117,8 +123,9 @@ class PlatonicBlock(nn.Module):
         self.linear2 = PlatonicLinear(dim_feedforward, d_model, solid=solid_name)
 
         # Layer Normalization (acts on the per-group-element channel dimension)
-        self.norm1 = nn.LayerNorm(self.dim_per_g, eps=layer_norm_eps)
-        self.norm2 = nn.LayerNorm(self.dim_per_g, eps=layer_norm_eps)
+        # Uses apex FusedLayerNorm when available for ~2x speedup
+        self.norm1 = LayerNorm(self.dim_per_g, eps=layer_norm_eps)
+        self.norm2 = LayerNorm(self.dim_per_g, eps=layer_norm_eps)
 
         self.dropout1 = nn.Dropout(dropout)
         self.dropout2 = nn.Dropout(dropout)
@@ -168,7 +175,7 @@ class PlatonicBlock(nn.Module):
         
         return x
 
-    def _normalize(self, x: Tensor, norm_layer: nn.LayerNorm) -> Tensor:
+    def _normalize(self, x: Tensor, norm_layer: nn.Module) -> Tensor:
         """Helper to apply LayerNorm on the per-group-element dimension."""
         leading_dims = x.shape[:-1]
         # Reshape to expose group axis: [..., G*C] -> [..., G, C]

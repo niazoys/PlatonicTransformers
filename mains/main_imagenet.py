@@ -246,6 +246,7 @@ def main(config: ml_collections.ConfigDict) -> None:
         accelerator=accelerator,
         devices=devices,
         enable_progress_bar=config.system.enable_progress_bar,
+        precision=getattr(config.system, 'precision', 'bf16-mixed'),
         strategy=DDPStrategy(find_unused_parameters=True) if config.system.gpus > 1 else 'auto',
     )
 
