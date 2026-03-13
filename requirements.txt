@@ -22,6 +22,9 @@ mendeleev
 scikit-learn
 rdkit
 
+# -- DALI (GPU-accelerated data loading, for ImageNet) --
+nvidia-dali-cuda120
+
 # -- Utilities --
 wandb
 ipdb

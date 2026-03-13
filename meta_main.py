@@ -5,6 +5,7 @@ import sys
 
 DATASETS = {
     'cifar10': 'main_cifar10.py',
+    'imagenet': 'main_imagenet.py',
     'omol': 'main_omol.py',
     'qm9_regr': 'main_qm9_regr.py',
 }
@@ -20,6 +21,7 @@ def print_usage() -> None:
     print("  python meta_main.py cifar10 --epochs 500 --batch_size 128 --lr 1e-3")
     print("  python meta_main.py qm9_regr --target mu --epochs 1000 --batch_size 96")
     print("  python meta_main.py omol --epochs 30 --batch_size 8 --lr 5e-4")
+    print("  python meta_main.py imagenet --config configs/imagenet_dali.yaml --batch_size 128")
     print()
     print("  # Using custom config:")
     print("  python meta_main.py cifar10 --config configs/cifar10_small.yaml")
