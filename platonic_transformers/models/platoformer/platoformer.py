@@ -60,6 +60,7 @@ class PlatonicTransformer(nn.Module):
         layer_scale_init_value: Optional[float] = None,
         attention: bool = False,
         ffn_dim_factor: int = 4,
+        norm_type: str = "layernorm",
         # RoPE and APE specification:
         rope_sigma: float = 1.0,  # if None it is not used
         ape_sigma: float = None,  # if None it is not used
@@ -111,6 +112,7 @@ class PlatonicTransformer(nn.Module):
                 dropout=dropout,
                 drop_path=drop_path_rate,
                 layer_scale_init_value=layer_scale_init_value,
+                norm_type=norm_type,
                 freq_sigma=rope_sigma,
                 freq_init=freq_init,
                 learned_freqs=learned_freqs,

@@ -14,6 +14,44 @@ try:
 except ImportError:
     LayerNorm = nn.LayerNorm
 
+# Use quack's fused RMSNorm kernel when available (H100+)
+try:
+    from quack import rmsnorm as _quack_rmsnorm
+except ImportError:
+    _quack_rmsnorm = None
+
+
+class RMSNorm(nn.Module):
+    """Root Mean Square Layer Normalization."""
+
+    def __init__(self, dim: int, eps: float = 1e-6):
+        super().__init__()
+        self.weight = nn.Parameter(torch.ones(dim))
+        self.weight._no_weight_decay = True
+        self.eps = eps
+
+    def forward(self, x: Tensor) -> Tensor:
+        if _quack_rmsnorm is not None and x.is_cuda:
+            return _quack_rmsnorm(x, self.weight, eps=self.eps)
+        input_dtype = x.dtype
+        x = x.to(torch.float32)
+        variance = x.pow(2).mean(-1, keepdim=True)
+        x = x * torch.rsqrt(variance + self.eps)
+        return (self.weight * x).to(input_dtype)
+
+
+def get_norm_layer(norm_type: str = "layernorm"):
+    """Return a norm class based on the requested type.
+
+    Args:
+        norm_type: One of "layernorm" (default, uses apex FusedLayerNorm if
+                   available) or "rmsnorm" (uses quack fused kernel on GPU,
+                   pure-PyTorch fallback on CPU).
+    """
+    if norm_type == "rmsnorm":
+        return RMSNorm
+    return LayerNorm
+
 
 def drop_path(x, drop_prob: float = 0., training: bool = False, scale_by_keep: bool = True):
     """Drop paths (Stochastic Depth) per sample."""
@@ -73,6 +111,7 @@ class PlatonicBlock(nn.Module):
         dropout: float = 0.1,
         activation: Callable[[Tensor], Tensor] = F.gelu,
         layer_norm_eps: float = 1e-5,
+        norm_type: str = "layernorm",
         norm_first: bool = True,
         spatial_dims: int = 3,
         drop_path: float = 0.0,
@@ -122,10 +161,10 @@ class PlatonicBlock(nn.Module):
         self.linear1 = PlatonicLinear(d_model, dim_feedforward, solid=solid_name)
         self.linear2 = PlatonicLinear(dim_feedforward, d_model, solid=solid_name)
 
-        # Layer Normalization (acts on the per-group-element channel dimension)
-        # Uses apex FusedLayerNorm when available for ~2x speedup
-        self.norm1 = LayerNorm(self.dim_per_g, eps=layer_norm_eps)
-        self.norm2 = LayerNorm(self.dim_per_g, eps=layer_norm_eps)
+        # Normalization (acts on the per-group-element channel dimension)
+        NormClass = get_norm_layer(norm_type)
+        self.norm1 = NormClass(self.dim_per_g, eps=layer_norm_eps)
+        self.norm2 = NormClass(self.dim_per_g, eps=layer_norm_eps)
 
         self.dropout1 = nn.Dropout(dropout)
         self.dropout2 = nn.Dropout(dropout)

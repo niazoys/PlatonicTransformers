@@ -78,8 +78,13 @@ python meta_main.py omol --predict_forces --force_weight 100
 ├── data/                    # Downloaded datasets and artifacts
 ├── mains/                   # Dataset-specific training scripts
 │   ├── main_cifar10.py
+│   ├── main_imagenet.py
 │   ├── main_omol.py
 │   └── main_qm9_regr.py
+├── scripts/                 # SLURM job scripts
+│   └── extract_imagenet_to_folder.py 
+│   └── extract_imagenet_to_folder.sh
+│   └── run_dali_test.sh
 ├── platonic_transformers/
 │   ├── datasets/            # Dataset loaders for supported benchmarks
 │   ├── models/              # Platonic Transformer building blocks
@@ -128,6 +133,7 @@ python meta_main.py omol --predict_forces --force_weight 100
 | Dataset | Task | Description |
 |---------|------|-------------|
 | `cifar10` | Image Classification | CIFAR-10 with patch-based point cloud representation |
+| `imagenet` | Image Classification | ImageNet-1K with NVIDIA DALI GPU-fused pipeline |
 | `qm9_regr` | Molecular Property Prediction | QM9 quantum chemistry dataset |
 | `omol` | Molecular Learning | Open Molecular Learning dataset |
 <!-- | `scanobjectnn` | 3D Object Classification | Real-world 3D scanned objects | (temporarily disabled) -->
@@ -264,6 +270,28 @@ python meta_main.py cifar10 --solid_name dihedral_6 ...
 - **Key Args:** `--num_points`, `--use_normals`
 -->
 
+### ImageNet-1K (`imagenet`)
+- **Task:** Large-scale Image Classification (1000 classes)
+- **Representation:** Images patchified into 2D point clouds (14x14 = 196 patches at patch size 16)
+- **Data Pipeline:** NVIDIA DALI GPU-fused preprocessing (decode, crop, augment on GPU)
+- **Augmentation:** ThreeAugment, RandAugment, ColorJitter, RandomErasing, Mixup/CutMix
+- **Key Args:** `--dataset.image_size`, `--dataset.patch_size`, `--training.batch_size`
+- **Config:** `configs/imagenet_dali.yaml`
+
+**Running on SLURM (single H100):**
+```bash
+sbatch scripts/run_imagenet_1gpu.sh
+```
+
+**Running directly:**
+```bash
+python mains/main_imagenet.py \
+    --config configs/imagenet_dali.yaml \
+    --dataset.data_dir=/path/to/imagenet  # ImageFolder layout with train/ and val/
+```
+
+> **Note:** ImageNet training requires an NVIDIA DALI installation (`nvidia-dali-cuda120`) and a GPU. The data directory must follow PyTorch ImageFolder layout (`train/<class>/` and `val/<class>/`).
+
 ### Open Molecular (`omol`)
 - **Task:** Molecular Property Prediction with LMDB backend
 - **Features:** Large-scale molecular learning with atomic embeddings
@@ -305,6 +333,100 @@ For questions or issues:
 - Email us [here](mailto:m.m.islam@uva.nl,e.j.bekkers@uva.nl)
 
 
+
+## 🖥️ ImageNet-1K Environment Setup
+
+The ImageNet-1K experiment requires additional GPU-accelerated libraries beyond the base environment. These are installed in a separate conda environment (`plato-dali`) to avoid dependency conflicts.
+
+### Prerequisites
+
+- CUDA 12.x (tested with 12.4 and 12.8)
+- PyTorch 2.4+ with CUDA 12.4 support
+- An NVIDIA GPU (H100 or newer)
+
+### 1. NVIDIA DALI
+
+[NVIDIA DALI](https://github.com/NVIDIA/DALI) (Data Loading Library) performs the entire image preprocessing pipeline on GPU — JPEG decode, random-resized crop, augmentation, and normalization — eliminating CPU-to-GPU transfer bottlenecks.
+
+```bash
+pip install nvidia-dali-cuda120==2.0.0
+```
+
+We use DALI 2.0 with the `DALIGenericIterator` to feed GPU tensors directly into the model without any host-device copies. The pipeline is defined in `platonic_transformers/datasets/imagenet_dali.py`.
+
+**Environment variable:** Set `DALI_NO_MMAP=1` on shared/network filesystems (e.g., GPFS, Lustre) to avoid mmap-related hangs.
+
+### 2. NVIDIA Apex
+
+[Apex](https://github.com/NVIDIA/apex) provides fused CUDA kernels for optimizers (FusedAdam, FusedLAMB) and normalization layers that are faster than their PyTorch-native equivalents.
+
+Apex must be built from source to match your exact PyTorch + CUDA versions:
+
+```bash
+git clone https://github.com/NVIDIA/apex.git
+cd apex
+pip install -v --disable-pip-version-check --no-cache-dir \
+    --no-build-isolation --config-settings "--build-option=--cpp_ext" \
+    --config-settings "--build-option=--cuda_ext" ./
+```
+
+> **Note:** The `apex/` directory in this repo is a local clone used for building. It is not a Python-importable package on its own — it must be installed via `pip install` as shown above.
+
+### 3. QuACK Kernels
+
+[QuACK](https://github.com/Dao-AILab/quack) (Quirky Assortment of CuTe Kernels) is a collection of high-performance GPU kernels written in NVIDIA's CuTe-DSL (a Python domain-specific language). It provides speed-of-light implementations of common deep learning operations:
+
+- **RMSNorm** (forward + backward)
+- **Softmax** (forward + backward)
+- **Cross-entropy** (forward + backward)
+- **LayerNorm** (forward)
+- **Hopper/Blackwell GEMM kernels** with custom epilogues
+
+```bash
+# CUDA 12.9+
+pip install quack-kernels
+
+# CUDA 13.1
+pip install 'quack-kernels[cu13]' --extra-index-url https://download.pytorch.org/whl/cu130
+```
+
+Requires: H100 or B200/B300 GPU, CUDA toolkit 12.9+, Python 3.12. Dependencies (`apache-tvm-ffi`, `nvidia-cutlass-dsl`, `torch-c-dlpack-ext`) are installed automatically.
+
+### Full Environment Summary
+
+| Package | Version | Purpose |
+|---------|---------|---------|
+| `nvidia-dali-cuda120` | 2.0.0 | GPU-fused data loading & augmentation |
+| `apex` | latest (from source) | Fused optimizers & normalization |
+| `quack-kernels` | 0.3.2 | CuTe-DSL fused CUDA kernels (softmax, RMSNorm, cross-entropy) |
+| `torch` | 2.4.0+cu124 | Base framework |
+| `pytorch-lightning` | 2.x | Training loop & distributed strategy |
+| `timm` | latest | Mixup/CutMix, RandAugment, RandomErasing |
+| `torch_geometric` | latest | Graph batching for point cloud representation |
+
+### Quick Setup (conda)
+
+```bash
+conda create -n plato-dali python=3.12 -y
+conda activate plato-dali
+
+# PyTorch with CUDA 12.4
+pip install torch torchvision --index-url https://download.pytorch.org/whl/cu124
+
+# Core dependencies
+pip install pytorch-lightning torch_geometric timm ml_collections wandb
+
+# GPU-accelerated libraries
+pip install nvidia-dali-cuda120==2.0.0
+pip install quack-kernels==0.3.2
+
+# Apex (from source)
+git clone https://github.com/NVIDIA/apex.git && cd apex
+pip install -v --disable-pip-version-check --no-cache-dir \
+    --no-build-isolation --config-settings "--build-option=--cpp_ext" \
+    --config-settings "--build-option=--cuda_ext" ./
+cd ..
+```
 
 <!-- *🚀🚀🚀Happy Experimenting! 🚀🚀🚀* -->
 

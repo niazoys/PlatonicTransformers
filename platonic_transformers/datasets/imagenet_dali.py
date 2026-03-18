@@ -400,6 +400,7 @@ def load_data(
         num_threads=num_workers,
         device_id=local_rank,
         seed=seed,
+        prefetch_queue_depth=prefetch_factor,
     )
     val_pipe.build()
 

@@ -24,6 +24,12 @@ from platonic_transformers.models.platoformer.groups import PLATONIC_GROUPS
 from platonic_transformers.utils.utils import CosineWarmupScheduler, RandomSOd
 from platonic_transformers.utils.callbacks import TimerCallback
 
+# Use quack's fused cross-entropy kernel when available (H100+)
+try:
+    from quack import cross_entropy as _quack_cross_entropy
+except ImportError:
+    _quack_cross_entropy = None
+
 # Performance optimization
 torch.set_float32_matmul_precision('medium')
 
@@ -77,6 +83,7 @@ class ImageNetModel(pl.LightningModule):
             layer_scale_init_value=config.model.layer_scale_init_value,
             attention=config.model.attention,
             ffn_dim_factor=config.model.ffn_dim_factor,
+            norm_type=getattr(config.model, 'norm_type', 'layernorm'),
             rope_sigma=config.model.rope_sigma,
             ape_sigma=config.model.ape_sigma,
             learned_freqs=config.model.learned_freqs,
@@ -118,8 +125,10 @@ class ImageNetModel(pl.LightningModule):
             # Soft targets from Mixup/CutMix
             return F.binary_cross_entropy_with_logits(pred, y)
         elif self.config.training.loss_fn == "bce":
-            y_one_hot = F.one_hot(y, num_classes=self.config.dataset.num_classes).float()
+            y_one_hot = F.one_hot(y, num_classes=self.config.dataset.num_classes).to(dtype=pred.dtype, device=pred.device)
             return F.binary_cross_entropy_with_logits(pred, y_one_hot)
+        elif _quack_cross_entropy is not None and pred.is_cuda:
+            return _quack_cross_entropy(pred, y, reduction='mean')
         else:
             return F.cross_entropy(pred, y)
 
@@ -158,8 +167,8 @@ class ImageNetModel(pl.LightningModule):
         self.log("test_acc_top5", self.test_metric_top5)
 
     def transfer_batch_to_device(self, batch, device, dataloader_idx):
-        """No-op: DALI data is already on GPU."""
-        return batch
+        """Move any straggling CPU tensors (e.g. DALI labels) to the target device."""
+        return batch.to(device)
 
     def configure_optimizers(self) -> dict:
         """Configure optimizer and learning rate scheduler."""
@@ -248,6 +257,7 @@ def main(config: ml_collections.ConfigDict) -> None:
         enable_progress_bar=config.system.enable_progress_bar,
         precision=getattr(config.system, 'precision', 'bf16-mixed'),
         strategy=DDPStrategy(find_unused_parameters=True) if config.system.gpus > 1 else 'auto',
+        num_sanity_val_steps=0,  # DALI iterators don't support mid-epoch resets
     )
 
     test_ckpt = config.testing.test_ckpt

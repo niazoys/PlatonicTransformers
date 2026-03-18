@@ -40,7 +40,7 @@ model:
   name: "platoformer"
   hidden_dim: 384
   num_layers: 12
-  num_heads: 6
+  num_heads: 8
   solid_name: "cyclic_4"
   spatial_dim: 2
   dense_mode: true
@@ -57,6 +57,7 @@ model:
   drop_path_rate: 0.1
   layer_scale_init_value: null
   ffn_dim_factor: 4
+  norm_type: "layernorm"           # "layernorm" (apex fused) or "rmsnorm" (quack fused on H100+)
 
   # Positional encoding (RoPE and APE)
   rope_sigma: 16.0
