@@ -22,6 +22,10 @@ mendeleev
 scikit-learn
 rdkit
 
+# -- GPU Acceleration (optional, graceful fallback if unavailable) --
+nvidia-dali-cuda120  # GPU-fused data loading for ImageNet
+# apex                # FusedLayerNorm, FusedLAMB — install from https://github.com/NVIDIA/apex
+
 # -- Utilities --
 wandb
 ipdb

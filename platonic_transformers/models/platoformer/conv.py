@@ -1,7 +1,6 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from torch.nn.attention import SDPBackend, sdpa_kernel
 from torch import Tensor
 from typing import Optional
 
@@ -244,8 +243,8 @@ class PlatonicConv(nn.Module):
             v_sdpa = v.view(B, S, self.num_G * self.effective_num_heads, self.head_dim).transpose(1, 2)
 
             attn_mask = mask[:, None, None, :] if mask is not None else None
-            with sdpa_kernel([SDPBackend.FLASH_ATTENTION, SDPBackend.MATH, SDPBackend.EFFICIENT_ATTENTION]):      
-               attn_output = F.scaled_dot_product_attention(q_sdpa, k_sdpa, v_sdpa, attn_mask=attn_mask)
+            # Let PyTorch auto-select the fastest SDPA backend (CuDNN on H100, Flash-2 elsewhere)
+            attn_output = F.scaled_dot_product_attention(q_sdpa, k_sdpa, v_sdpa, attn_mask=attn_mask)
 
             # Reshape back for output projection: (B, G*H, S, Dh)/(B, H, S, G*Dh) -> (B, S, G*H*Dh)
             output = attn_output.transpose(1, 2).reshape(B, S, self.embed_dim)
