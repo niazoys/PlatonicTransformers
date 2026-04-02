@@ -4,7 +4,34 @@ import torch.nn.functional as F
 from torch import Tensor
 from typing import Optional
 
-from torch_scatter import scatter_softmax,scatter_sum
+# Native PyTorch scatter ops — torch.compile compatible, no torch_scatter dependency.
+def __scatter_sum(src: torch.Tensor, index: torch.Tensor, dim: int = 0,
+                 dim_size: int = None) -> torch.Tensor:
+    """Drop-in replacement for torch_scatter.scatter_sum using native PyTorch."""
+    if dim_size is None:
+        dim_size = int(index.max()) + 1
+    out_shape = list(src.shape)
+    out_shape[dim] = dim_size
+    out = torch.zeros(out_shape, dtype=src.dtype, device=src.device)
+    idx = index
+    while idx.dim() < src.dim():
+        idx = idx.unsqueeze(-1)
+    idx = idx.expand_as(src)
+    return out.scatter_add_(dim, idx, src)
+
+
+def __scatter_softmax(src: torch.Tensor, index: torch.Tensor, dim: int = 0,
+                     dim_size: int = None) -> torch.Tensor:
+    """Drop-in replacement for torch_scatter.scatter_softmax using native PyTorch."""
+    if dim_size is None:
+        dim_size = int(index.max()) + 1
+    max_vals = torch.zeros(dim_size, dtype=src.dtype, device=src.device)
+    max_vals.scatter_reduce_(0, index, src, reduce="amax", include_self=False)
+    src_shifted = src - max_vals[index]
+    exp_src = torch.exp(src_shifted)
+    sum_exp = torch.zeros(dim_size, dtype=src.dtype, device=src.device)
+    sum_exp.scatter_add_(0, index, exp_src)
+    return exp_src / (sum_exp[index] + 1e-16)
 
 try:
     from torch_cluster import knn_graph  
@@ -182,7 +209,7 @@ class PlatonicConv(nn.Module):
         head_ids = torch.arange(GH, device=device).repeat(E, 1)     # [E, GH]
         group_ids = src.unsqueeze(1) * GH + head_ids                # [E, GH]
 
-        a = scatter_softmax(
+        a = _scatter_softmax(
             scores.flatten(),
             group_ids.flatten(),
             dim=0,
@@ -191,7 +218,7 @@ class PlatonicConv(nn.Module):
 
         weighted = (a.unsqueeze(-1) * v_dst).reshape(-1, D)         # [E*GH, D]
 
-        out = scatter_sum(
+        out = _scatter_sum(
             weighted,
             group_ids.flatten(),
             dim=0,
