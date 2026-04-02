@@ -18,8 +18,11 @@ def lift_vectors(x, group):
 def readout_scalars(x, group):
     return x.mean(dim=-2)  # (..., G * C) -> (..., G, C) -> (..., C)
 
-def readout_vectors(x, group):
-    x = x.unflatten(-1, (-1, group.dim))  # (..., G * C) -> (..., G, C, 3)
+@torch.compiler.disable
+def readout_vectors(x, group, num_vectors=None):
+    if num_vectors is None:
+        num_vectors = x.shape[-1] // group.dim
+    x = x.unflatten(-1, (num_vectors, group.dim))  # (..., C*3) -> (..., C, 3)
     frames = group.elements.type_as(x)  # (G, 3, 3)
     return torch.einsum('gij,...gcj->...ci', frames, x) / group.G  # frame transposed, result: (..., c, 3)
 
@@ -31,11 +34,13 @@ def lift(scalars, vectors, group):
         x_list.append(lift_vectors(vectors, group))
     return torch.cat(x_list, dim=-1).flatten(-2, -1)  # (..., G, C) -> (..., G * C)
 
+@torch.compiler.disable
 def to_scalars_vectors(x, num_scalars, num_vectors, group):
-    x = x.unflatten(-1, (group.G, -1))
+    C_per_g = num_scalars + num_vectors * group.dim  # concrete int, no symbolic shapes
+    x = x.reshape(*x.shape[:-1], group.G, C_per_g)
     x_scalars, x_vectors = x.split([num_scalars, num_vectors * group.dim], dim=-1)  # (..., G * C) -> (..., G, C)
     scalars = readout_scalars(x_scalars, group)
-    vectors = readout_vectors(x_vectors, group)
+    vectors = readout_vectors(x_vectors, group, num_vectors=num_vectors)
     return scalars, vectors  # (..., C), (..., C, 3)
 
 def to_dense_and_mask(x: torch.Tensor, vec: torch.Tensor, pos: torch.Tensor, batch: Optional[torch.Tensor]):
