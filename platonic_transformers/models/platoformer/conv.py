@@ -5,9 +5,9 @@ from torch import Tensor
 from typing import Optional
 
 # Native PyTorch scatter ops — torch.compile compatible, no torch_scatter dependency.
-def __scatter_sum(src: torch.Tensor, index: torch.Tensor, dim: int = 0,
+def _scatter_sum(src: torch.Tensor, index: torch.Tensor, dim: int = 0,
                  dim_size: int = None) -> torch.Tensor:
-    """Drop-in replacement for torch_scatter.scatter_sum using native PyTorch."""
+    """Native PyTorch replacement for torch_scatter.scatter_sum."""
     if dim_size is None:
         dim_size = int(index.max()) + 1
     out_shape = list(src.shape)
@@ -20,9 +20,9 @@ def __scatter_sum(src: torch.Tensor, index: torch.Tensor, dim: int = 0,
     return out.scatter_add_(dim, idx, src)
 
 
-def __scatter_softmax(src: torch.Tensor, index: torch.Tensor, dim: int = 0,
+def _scatter_softmax(src: torch.Tensor, index: torch.Tensor, dim: int = 0,
                      dim_size: int = None) -> torch.Tensor:
-    """Drop-in replacement for torch_scatter.scatter_softmax using native PyTorch."""
+    """Native PyTorch replacement for torch_scatter.scatter_softmax."""
     if dim_size is None:
         dim_size = int(index.max()) + 1
     max_vals = torch.zeros(dim_size, dtype=src.dtype, device=src.device)
@@ -35,7 +35,7 @@ def __scatter_softmax(src: torch.Tensor, index: torch.Tensor, dim: int = 0,
 
 try:
     from torch_cluster import knn_graph  
-except ImportError:
+except (ImportError, OSError):
     knn_graph = None
 
 from platonic_transformers.models.platoformer.utils import scatter_add
@@ -70,11 +70,13 @@ class PlatonicConv(nn.Module):
         bias: bool = True,
         mean_aggregation: bool = False,
         attention: bool = False,
-        use_key: bool = False
+        use_key: bool = False,
+        rope_on_values: bool = False,
     ):
         super().__init__()
 
         # --- Group Setup ---
+        self.rope_on_values = rope_on_values
         self.group = PLATONIC_GROUPS[solid_name.lower()]
         self.num_G = self.group.G
         
@@ -144,10 +146,12 @@ class PlatonicConv(nn.Module):
         v = v_raw.view(*leading_dims, self.num_G, self.effective_num_heads, self.head_dim)
         k = k_raw.view(*leading_dims, self.num_G, self.effective_num_heads, self.head_dim)
 
-        # Apply RoPE to query and key
+        # Apply RoPE to query and key (and optionally value, per GTA Eq. 5)
         if self.rope_emb is not None:
             q = self.rope_emb(q, pos)
             k = self.rope_emb(k, pos)
+            if self.rope_on_values:
+                v = self.rope_emb(v, pos)
 
         return q, k, v
 
@@ -156,9 +160,9 @@ class PlatonicConv(nn.Module):
         k: torch.Tensor,      # [N, G, H, D]
         v: torch.Tensor,      # [N, G, H, D]
         batch: torch.Tensor,  # [N]
-        pos: torch.Tensor | None = None,     
-        edge_index: torch.Tensor | None = None,
-        k_knn: int | None = None
+        pos: Optional[torch.Tensor] = None,
+        edge_index: Optional[torch.Tensor] = None,
+        k_knn: Optional[int] = None
     ) -> torch.Tensor:
         """
         Compute fully connected edges if edge_index is None, or kNN edges if k_knn is given.
@@ -239,6 +243,11 @@ class PlatonicConv(nn.Module):
   
         if self.attention:
             output = self.graph_scattered_attention(q_rope, k_rope, v, batch, pos)
+            # Un-rotate output (GTA Eq. 5: O_i = ρ(g_i)⁻¹ * weighted_sum)
+            if self.rope_on_values and self.rope_emb is not None:
+                output_ghd = output.view(-1, self.num_G, self.effective_num_heads, self.head_dim)
+                output_ghd = self.rope_emb(output_ghd, pos, inverse=True)
+                output = output_ghd.flatten(-3, -1)
         else:
             kv_outer_product = torch.einsum('nghd,nghe->nghde', k_rope, v)
             num_graphs = batch.max() + 1
@@ -249,8 +258,11 @@ class PlatonicConv(nn.Module):
             else:
                 num_nodes = avg_num_nodes
             kv_kernel = kv_kernel / num_nodes
-            
+
             output = torch.einsum('nghd,nghde->nghe', q_rope, kv_kernel[batch])
+            # Un-rotate output for linear attention
+            if self.rope_on_values and self.rope_emb is not None:
+                output = self.rope_emb(output, pos, inverse=True)
             output = output.flatten(-3, -1) # -> (..., G, H, H_dim) -> (..., G*H*H_dim)
 
         return self.out_proj(output)
@@ -273,8 +285,12 @@ class PlatonicConv(nn.Module):
             # Let PyTorch auto-select the fastest SDPA backend (CuDNN on H100, Flash-2 elsewhere)
             attn_output = F.scaled_dot_product_attention(q_sdpa, k_sdpa, v_sdpa, attn_mask=attn_mask)
 
-            # Reshape back for output projection: (B, G*H, S, Dh)/(B, H, S, G*Dh) -> (B, S, G*H*Dh)
-            output = attn_output.transpose(1, 2).reshape(B, S, self.embed_dim)
+            # Reshape back: (B, G*H, S, Dh) -> (B, S, G, H, Dh)
+            attn_output = attn_output.transpose(1, 2).view(B, S, self.num_G, self.effective_num_heads, self.head_dim)
+            # Un-rotate output (GTA Eq. 5: O_i = ρ(g_i)⁻¹ * weighted_sum)
+            if self.rope_on_values and self.rope_emb is not None:
+                attn_output = self.rope_emb(attn_output, pos, inverse=True)
+            output = attn_output.reshape(B, S, self.embed_dim)
         else:
             if mask is not None:
                 # Apply mask before aggregation

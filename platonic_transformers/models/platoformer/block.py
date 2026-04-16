@@ -122,6 +122,7 @@ class PlatonicBlock(nn.Module):
         mean_aggregation: bool = False,
         attention: bool = False,
         use_key: bool = False,
+        rope_on_values: bool = False,
     ) -> None:
         super().__init__()
 
@@ -155,6 +156,7 @@ class PlatonicBlock(nn.Module):
             mean_aggregation=mean_aggregation,
             attention=attention,
             use_key=use_key,
+            rope_on_values=rope_on_values,
         )
 
         # Equivariant Feed-Forward Network
@@ -175,8 +177,11 @@ class PlatonicBlock(nn.Module):
         self.drop_path1 = DropPath(drop_path) if drop_path > 0. else nn.Identity()
         self.drop_path2 = DropPath(drop_path) if drop_path > 0. else nn.Identity()
         
-        self.gamma_1 = nn.Parameter(layer_scale_init_value * torch.ones((d_model)), requires_grad=True) if layer_scale_init_value is not None else None
-        self.gamma_2 = nn.Parameter(layer_scale_init_value * torch.ones((d_model)), requires_grad=True) if layer_scale_init_value is not None else None
+        # LayerScale: per-channel scaling, shared across group axis for equivariance.
+        # Shape (C,) not (G*C,) — the group acts by permuting G, so gamma must be
+        # constant across G to commute with the group action.
+        self.gamma_1 = nn.Parameter(layer_scale_init_value * torch.ones((self.dim_per_g)), requires_grad=True) if layer_scale_init_value is not None else None
+        self.gamma_2 = nn.Parameter(layer_scale_init_value * torch.ones((self.dim_per_g)), requires_grad=True) if layer_scale_init_value is not None else None
 
 
     def forward(
@@ -200,7 +205,7 @@ class PlatonicBlock(nn.Module):
         normed_x = self._normalize(x, self.norm1)
         interaction_out = self._interaction_block(normed_x, pos, batch, mask, avg_num_nodes)
         if self.gamma_1 is not None:
-            interaction_out = self.gamma_1 * interaction_out
+            interaction_out = self._apply_layer_scale(interaction_out, self.gamma_1)
         residual = self.drop_path1(interaction_out)
         x = x + residual
 
@@ -208,11 +213,18 @@ class PlatonicBlock(nn.Module):
         normed_ff = self._normalize(x, self.norm2)
         ff_output = self._ff_block(normed_ff)
         if self.gamma_2 is not None:
-            ff_output = self.gamma_2 * ff_output
+            ff_output = self._apply_layer_scale(ff_output, self.gamma_2)
         residual = self.drop_path2(ff_output)
         x = x + residual
         
         return x
+
+    def _apply_layer_scale(self, x: Tensor, gamma: Tensor) -> Tensor:
+        """Apply LayerScale gamma (C,) to features (..., G*C), shared across G."""
+        leading_dims = x.shape[:-1]
+        x_reshaped = x.view(*leading_dims, self.num_G, self.dim_per_g)
+        scaled = gamma * x_reshaped
+        return scaled.view(*leading_dims, -1)
 
     def _normalize(self, x: Tensor, norm_layer: nn.Module) -> Tensor:
         """Helper to apply LayerNorm on the per-group-element dimension."""
