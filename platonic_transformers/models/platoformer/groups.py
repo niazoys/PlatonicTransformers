@@ -21,7 +21,7 @@ class PlatonicSolidGroup:
         self.elements: Tensor = group_elements.to(dtype=torch.float64)
         self.G: int = self.elements.shape[0]
 
-        if solid_name in ["trivial", "tetrahedron", "octahedron", "icosahedron", "octahedron_reflections"]:
+        if solid_name in ["trivial", "tetrahedron", "tetrahedron_full", "octahedron", "icosahedron", "octahedron_reflections"]:
             self.dim = 3
         elif solid_name.startswith("flop_"):
             parts = solid_name.split("_")
@@ -36,6 +36,8 @@ class PlatonicSolidGroup:
                     f"Invalid flop group name '{solid_name}'. Expected numeric dimension and axis."
                 )
             self.dim = int(dim_part)
+        elif solid_name.startswith("cyclic_3d") or solid_name.startswith("dihedral_3d"):
+            self.dim = 3
         elif solid_name.startswith("cyclic") or solid_name.startswith("dihedral"):
             self.dim = 2
         elif solid_name.startswith("trivial_"):
@@ -152,6 +154,38 @@ def _generate_cyclic_permutation_elements(n: int) -> Tensor:
         
     return torch.stack(elements)
 
+def _generate_cyclic_3d_elements(n: int, axis: int = 2) -> Tensor:
+    """Generates the n rotation matrices of the 3D cyclic group C_n around a coordinate axis.
+
+    Args:
+        n: Order of the cyclic group (number of rotations).
+        axis: Rotation axis (0=x, 1=y, 2=z). Default: z-axis.
+
+    Returns:
+        Tensor of shape (n, 3, 3) with orthogonal rotation matrices.
+    """
+    if not isinstance(n, int) or n <= 0:
+        raise ValueError("Number of elements 'n' must be a positive integer.")
+
+    elements = []
+    angle_step = 2 * math.pi / n
+    # Indices of the two axes orthogonal to the rotation axis
+    i, j = [(1,2), (2,0), (0,1)][axis]
+
+    for k in range(n):
+        angle = k * angle_step
+        cos_a = math.cos(angle)
+        sin_a = math.sin(angle)
+        rot = torch.eye(3, dtype=torch.float32)
+        rot[i, i] = cos_a
+        rot[i, j] = -sin_a
+        rot[j, i] = sin_a
+        rot[j, j] = cos_a
+        elements.append(rot)
+
+    return torch.stack(elements)
+
+
 def _generate_dihedral_elements(n: int) -> Tensor:
     """
     Generates the 2n elements of the 2D dihedral group D_n, which includes
@@ -172,6 +206,18 @@ def _get_tetrahedral_elements(dtype=torch.float32) -> Tensor:
         [[0,0,1],[1,0,0],[0,1,0]],[[0,1,0],[0,0,1],[1,0,0]],[[0,0,-1],[1,0,0],[0,-1,0]],[[0,-1,0],[0,0,-1],[1,0,0]],
         [[0,0,1],[-1,0,0],[0,-1,0]],[[0,-1,0],[0,0,1],[-1,0,0]],[[0,0,-1],[-1,0,0],[0,1,0]],[[0,1,0],[0,0,-1],[-1,0,0]],
     ], dtype=dtype)
+
+def _get_tetrahedral_full_elements(dtype=torch.float32) -> Tensor:
+    """Returns the 24 elements of the full tetrahedral group T_d (rotations + reflections).
+
+    Constructed as T_d = T ∪ σT, where T is the 12-element rotation group and
+    σ is the reflection (x,y,z) → (y,x,z) (mirror plane through x=y).
+    """
+    T = _get_tetrahedral_elements(dtype=dtype)
+    sigma = torch.tensor([[0,1,0],[1,0,0],[0,0,1]], dtype=dtype)
+    improper = torch.einsum('ij, njk -> nik', sigma, T)
+    return torch.cat([T, improper], dim=0)
+
 
 def _get_octahedral_elements() -> Tensor:
     """Returns the 24 rotation matrices of the Octahedral group."""
@@ -235,8 +281,9 @@ def _get_axis_aligned_reflection_elements() -> Tensor:
     return torch.stack(elements)
 
 # Create global instances for each group
-TRIVIAL_GROUP = PlatonicSolidGroup(_get_trivial_elements(), "trivial") 
+TRIVIAL_GROUP = PlatonicSolidGroup(_get_trivial_elements(), "trivial")
 TETRAHEDRAL_GROUP = PlatonicSolidGroup(_get_tetrahedral_elements(), "tetrahedron")
+TETRAHEDRAL_FULL_GROUP = PlatonicSolidGroup(_get_tetrahedral_full_elements(), "tetrahedron_full")
 OCTAHEDRAL_GROUP = PlatonicSolidGroup(_get_octahedral_elements(), "octahedron")
 ICOSAHEDRAL_GROUP = PlatonicSolidGroup(_generate_icosahedral_elements(), "icosahedron")
 OCTAHEDRON_REFLECTIONS_GROUP = PlatonicSolidGroup(_get_axis_aligned_reflection_elements(), "octahedron_reflections")
@@ -246,6 +293,7 @@ OCTAHEDRON_REFLECTIONS_GROUP = PlatonicSolidGroup(_get_axis_aligned_reflection_e
 PLATONIC_GROUPS: Dict[str, PlatonicSolidGroup] = {
     "trivial": TRIVIAL_GROUP,
     "tetrahedron": TETRAHEDRAL_GROUP,
+    "tetrahedron_full": TETRAHEDRAL_FULL_GROUP,
     "octahedron": OCTAHEDRAL_GROUP,
     "icosahedron": ICOSAHEDRAL_GROUP,
     "octahedron_reflections": OCTAHEDRON_REFLECTIONS_GROUP, 
@@ -304,6 +352,13 @@ dihedral_groups = {
     for n in range(2, 21)
 }
 PLATONIC_GROUPS.update(dihedral_groups)
+
+# Add the 3D cyclic groups C_n (rotations around z-axis) for n = 2 to 12
+cyclic_3d_groups = {
+    f"cyclic_3d_{n}": PlatonicSolidGroup(_generate_cyclic_3d_elements(n, axis=2), f"cyclic_3d_{n}")
+    for n in range(2, 13)
+}
+PLATONIC_GROUPS.update(cyclic_3d_groups)
 
 
 # # Example usage:

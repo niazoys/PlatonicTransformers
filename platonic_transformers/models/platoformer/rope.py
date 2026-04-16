@@ -83,7 +83,7 @@ class PlatonicRoPE(nn.Module):
         else:
             self.register_buffer("freqs", freqs)
 
-    def forward(self, x: Tensor, pos: Tensor) -> Tensor:
+    def forward(self, x: Tensor, pos: Tensor, inverse: bool = False) -> Tensor:
         """
         Apply group-equivariant rotary embeddings to the input tensor.
 
@@ -92,6 +92,9 @@ class PlatonicRoPE(nn.Module):
                         The G*H dimension represents the merged group and head axes.
             pos (Tensor): Position tensor of shape (..., spatial_dims). The leading
                           dimensions '...' must be broadcastable to the input tensor x.
+            inverse (bool): If True, apply the inverse rotation R(-theta) by negating
+                            the sine component. Used to un-rotate values after attention
+                            (GTA Eq. 5).
 
         Returns:
             Tensor: The rotated input tensor `x_rotated` of the same shape (..., G, H, D_h).
@@ -100,7 +103,7 @@ class PlatonicRoPE(nn.Module):
         *leading_dims, G, H, D_h = x.shape
         if G != self.num_G or H != self.num_heads or D_h != self.head_dim:
             raise ValueError(f"Input shape {x.shape} does not match expected shape (..., {self.num_G}, {self.num_heads}, {self.head_dim}).")
-        
+
         # 2. --- Compute Rotated frequencies ---
         freqs_rotated = torch.einsum('gde, hfe -> ghfd', self.group_elements, self.freqs)
 
@@ -108,6 +111,8 @@ class PlatonicRoPE(nn.Module):
         angles = torch.einsum('...d, ghfd -> ...ghf', pos, freqs_rotated)
         cos_angles = torch.cos(angles)
         sin_angles = torch.sin(angles)
+        if inverse:
+            sin_angles = -sin_angles
 
         # 3. --- Apply Rotations to Input Features ---
         # Reshape input features to expose pairs for 2D rotation.

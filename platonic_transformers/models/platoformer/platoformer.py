@@ -1,5 +1,6 @@
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torch import Tensor
 from typing import Optional
 
@@ -67,8 +68,16 @@ class PlatonicTransformer(nn.Module):
         learned_freqs: bool = True,
         freq_init: str = 'random',
         use_key: bool = False,
+        rope_on_values: bool = False,
+        activation: str = "gelu",
     ):
         super().__init__()
+
+        # Resolve activation function from string
+        _activations = {"gelu": F.gelu, "silu": F.silu, "relu": F.relu, "mish": F.mish}
+        if activation not in _activations:
+            raise ValueError(f"Unknown activation '{activation}'. Choose from {list(_activations.keys())}")
+        _activation_fn = _activations[activation]
 
         if scalar_task_level not in ["node", "graph"]:
             raise ValueError("scalar_task_level must be 'node' or 'graph'.")
@@ -110,6 +119,7 @@ class PlatonicTransformer(nn.Module):
                 dim_feedforward=dim_feedforward,
                 solid_name=solid_name,
                 dropout=dropout,
+                activation=_activation_fn,
                 drop_path=drop_path_rate,
                 layer_scale_init_value=layer_scale_init_value,
                 norm_type=norm_type,
@@ -120,6 +130,7 @@ class PlatonicTransformer(nn.Module):
                 mean_aggregation=mean_aggregation,
                 attention=attention,
                 use_key=use_key,
+                rope_on_values=rope_on_values,
             ))
             
         if ffn_readout:
