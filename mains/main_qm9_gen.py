@@ -156,6 +156,7 @@ def edm_sampler(
     """Karras Euler-Maruyama sampler with second-order correction."""
     sigma_min = max(sigma_min, net.sigma_min)
     sigma_max = min(sigma_max, net.sigma_max)
+    num_graphs = int(batch.max().item()) + 1
 
     step_indices = torch.arange(num_steps, dtype=torch.float32, device=pos_0.device)
     t_steps = (
@@ -174,14 +175,14 @@ def edm_sampler(
         x_hat = x_cur + (t_hat ** 2 - t_cur ** 2).sqrt() * S_noise * torch.randn_like(x_cur)
         pos_hat = pos_cur + (t_hat ** 2 - t_cur ** 2).sqrt() * S_noise * torch.randn_like(pos_cur)
 
-        x_denoised, pos_denoised = net(x_hat, pos_hat, batch, t_hat.expand(batch.shape[0]))
+        x_denoised, pos_denoised = net(x_hat, pos_hat, batch, t_hat.expand(num_graphs))
         dx_cur = (x_hat - x_denoised) / t_hat
         dpos_cur = (pos_hat - pos_denoised) / t_hat
         x_next = x_hat + (t_next - t_hat) * dx_cur
         pos_next = pos_hat + (t_next - t_hat) * dpos_cur
 
         if i < num_steps - 1:
-            x_denoised, pos_denoised = net(x_next, pos_next, batch, t_next.expand(batch.shape[0]))
+            x_denoised, pos_denoised = net(x_next, pos_next, batch, t_next.expand(num_graphs))
             dx_prime = (x_next - x_denoised) / t_next
             dpos_prime = (pos_next - pos_denoised) / t_next
             x_next = x_hat + (t_next - t_hat) * (0.5 * dx_cur + 0.5 * dx_prime)
