@@ -1,13 +1,11 @@
 import os
-# from configs.datasets_config import get_dataset_info
 import pickle
 import tempfile
 
 import numpy as np
-# from . import dataset
 import torch
-from pymatgen.core import Molecule
 from rdkit import Chem
+from rdkit.Chem import rdDetermineBonds
 
 from platonic_transformers.datasets.qm9_bond_analyze import geom_predictor, get_bond_order
 
@@ -30,16 +28,13 @@ class BasicMolecularMetrics(object):
 
     def compute_validity(self, generated):
         """
-        Computes validity of a list of generated molecules.
-        Now uses the PDB-based method to infer bonds.
+        Compute validity of a list of generated molecules.
+        Uses RDKit's rdDetermineBonds to infer bond orders from 3D coordinates.
         """
         valid = []
 
         for graph in generated:
-            # Build molecule via temporary PDB file to let RDKit infer bonds
-            mol = build_molecule_from_pdb(*graph[:2], self.dataset_info)
-
-            # If molecule could not be built from PDB, it's considered invalid
+            mol = build_molecule_from_xyz(*graph[:2], self.dataset_info)
             if mol is None:
                 continue
 
@@ -95,33 +90,33 @@ def mol2smiles(mol):
     return Chem.MolToSmiles(mol)
 
 
-def build_molecule_from_pdb(positions, atom_types, dataset_info):
+def build_molecule_from_xyz(positions, atom_types, dataset_info):
     """
-    Builds an RDKit molecule by creating a Pymatgen molecule, writing it
-    to a temporary PDB file, and then reading it back with RDKit.
-    This method relies on RDKit's bond inference from 3D coordinates.
+    Build an RDKit molecule from 3D coordinates + atom types.
+
+    Uses RDKit's rdDetermineBonds.DetermineBonds which infers both connectivity
+    and bond orders from interatomic distances and valence constraints. No
+    external dependency on OpenBabel/pymatgen.
     """
     atom_decoder = dataset_info["atom_decoder"]
     atomic_symbols = [atom_decoder[atom.item()] for atom in atom_types]
-    pos_numpy = positions.cpu().numpy()
+    pos_numpy = positions.detach().cpu().numpy()
+
+    # Build a minimal XYZ block (first line = atom count, second = comment, then rows).
+    lines = [str(len(atomic_symbols)), ""]
+    for sym, (x, y, z) in zip(atomic_symbols, pos_numpy):
+        lines.append(f"{sym} {float(x):.6f} {float(y):.6f} {float(z):.6f}")
+    xyz_block = "\n".join(lines) + "\n"
 
     try:
-        # Use a temporary directory to avoid file collisions and ensure cleanup
-        with tempfile.TemporaryDirectory() as tmpdir:
-            pdb_path = os.path.join(tmpdir, 'temp_mol.pdb')
-
-            # Create a Pymatgen molecule object
-            pymatgen_mol = Molecule(species=atomic_symbols, coords=pos_numpy)
-
-            # Save to PDB format
-            pymatgen_mol.to(filename=pdb_path, fmt="pdb")
-
-            # Read from PDB with RDKit to infer molecular graph
-            rdkit_mol = Chem.MolFromPDBFile(pdb_path, removeHs=False)
-
-        return rdkit_mol
+        mol = Chem.MolFromXYZBlock(xyz_block)
+        if mol is None:
+            return None
+        # DetermineBonds mutates mol in place: adds bonds + bond orders.
+        # QM9 molecules are all neutral.
+        rdDetermineBonds.DetermineBonds(mol, charge=0)
+        return mol
     except Exception:
-        # If any step fails (e.g., Pymatgen error, file error), return None
         return None
 
 
