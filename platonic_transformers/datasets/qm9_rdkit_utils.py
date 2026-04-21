@@ -6,6 +6,7 @@ import numpy as np
 import torch
 from rdkit import Chem
 from rdkit.Chem import rdDetermineBonds
+from rdkit.Chem.inchi import MolToInchiKey
 
 from platonic_transformers.datasets.qm9_bond_analyze import geom_predictor, get_bond_order
 
@@ -18,13 +19,13 @@ bond_dict = [None, Chem.rdchem.BondType.SINGLE, Chem.rdchem.BondType.DOUBLE, Che
 class BasicMolecularMetrics(object):
     def __init__(self, dataset_info, dataset_smiles_list=None):
         self.atom_decoder = dataset_info['atom_decoder']
-        self.dataset_smiles_list = dataset_smiles_list
         self.dataset_info = dataset_info
-
-        # Retrieve dataset smiles only for qm9 currently.
-        # if dataset_smiles_list is None and 'qm9' in dataset_info['name']:
-            # self.dataset_smiles_list = retrieve_qm9_smiles(
-                # self.dataset_info)
+        # Keep the raw SMILES list (used for logging/debug), and also pre-compute
+        # an InChIKey set of the training molecules so novelty comparison is
+        # invariant to bond-order perception / tautomer / aromaticity differences
+        # between the SDF-derived SMILES and rdDetermineBonds-derived SMILES.
+        self.dataset_smiles_list = dataset_smiles_list
+        self.dataset_inchikey_set = _smiles_list_to_inchikeys(dataset_smiles_list)
 
     def compute_validity(self, generated):
         """
@@ -53,10 +54,24 @@ class BasicMolecularMetrics(object):
         return list(set(valid)), len(set(valid)) / len(valid)
 
     def compute_novelty(self, unique):
+        """Compare generated SMILES against training set via InChIKey.
+
+        InChI normalizes bond perception, tautomers, and aromaticity, so a
+        generated molecule derived from 3D coords via rdDetermineBonds is
+        correctly identified as matching a training molecule even when the
+        canonical SMILES strings differ.
+        """
+        if not self.dataset_inchikey_set:
+            return list(unique), 1.0  # no reference; everything is "novel"
         num_novel = 0
         novel = []
         for smiles in unique:
-            if smiles not in self.dataset_smiles_list:
+            mol = Chem.MolFromSmiles(smiles)
+            if mol is None:
+                # Cannot compute InChIKey -> conservatively treat as non-novel.
+                continue
+            key = MolToInchiKey(mol)
+            if key and key not in self.dataset_inchikey_set:
                 novel.append(smiles)
                 num_novel += 1
         return novel, num_novel / len(unique)
@@ -80,6 +95,21 @@ class BasicMolecularMetrics(object):
             uniqueness = 0.0
             unique = None
         return [validity, uniqueness, novelty], unique
+
+
+def _smiles_list_to_inchikeys(smiles_list):
+    """Convert a list of SMILES to a set of InChIKeys for robust identity matching."""
+    if smiles_list is None:
+        return None
+    keys = set()
+    for s in smiles_list:
+        mol = Chem.MolFromSmiles(s)
+        if mol is None:
+            continue
+        k = MolToInchiKey(mol)
+        if k:
+            keys.add(k)
+    return keys
 
 
 def mol2smiles(mol):
