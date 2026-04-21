@@ -59,21 +59,26 @@ class EDMPrecond(torch.nn.Module):
         self.avg_num_nodes = avg_num_nodes
 
     def forward(self, x, pos, batch, sigma):
+        # sigma may be per-node (shape [N] or [N,1], e.g. from EDMLoss) or per-graph
+        # (shape [B] or [B,1], e.g. from the sampler). Normalize to a per-graph vector.
         sigma = sigma.reshape(-1, 1)
+        num_graphs = int(batch.max().item()) + 1
+        if sigma.shape[0] == batch.shape[0]:
+            # Per-node form — reduce to per-graph (values are identical within a graph).
+            sigma_per_graph = torch.unique_consecutive(sigma.squeeze(-1)).reshape(-1, 1)
+        elif sigma.numel() == 1:
+            sigma_per_graph = sigma.expand(num_graphs, 1)
+        else:
+            sigma_per_graph = sigma
+        sigma_per_node = sigma_per_graph[batch]  # (N, 1)
 
-        c_skip = self.sigma_data ** 2 / (sigma ** 2 + self.sigma_data ** 2)
-        c_out = sigma * self.sigma_data / (sigma ** 2 + self.sigma_data ** 2).sqrt()
-        c_in = 1 / (self.sigma_data ** 2 + sigma ** 2).sqrt()
-        c_noise = sigma.log() / 4
+        c_skip = self.sigma_data ** 2 / (sigma_per_node ** 2 + self.sigma_data ** 2)
+        c_out = sigma_per_node * self.sigma_data / (sigma_per_node ** 2 + self.sigma_data ** 2).sqrt()
+        c_in = 1 / (self.sigma_data ** 2 + sigma_per_node ** 2).sqrt()
+        c_noise = sigma_per_graph.log() / 4  # (B, 1)
 
         x_in = c_in * x
         pos_in = c_in * pos
-
-        # Broadcast c_noise to per-graph if it was given per-node, or expand a scalar.
-        if c_noise.shape[0] == batch.shape[0]:
-            c_noise = torch.unique_consecutive(c_noise).unsqueeze(-1)
-        elif c_noise.numel() == 1:
-            c_noise = c_noise.expand(batch.max() + 1, 1)
 
         # Also feed noise as a per-node scalar input feature (matches cleaned-dev).
         scalars_in = torch.cat([x_in, c_noise[batch]], dim=-1)
