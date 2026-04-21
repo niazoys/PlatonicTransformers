@@ -58,10 +58,15 @@ class QM9Dataset(Dataset):
         self.dataset_to_pytorch()
 
     def apply_split(self):
-        # Create the split based on the predefined sizes (seed used by DimeNet)
+        # RDKit-version differences can drop a few molecules; use the actual processed size.
+        n = len(self.data)
+        train_size = min(self.TRAIN_SIZE, n)
+        val_size = min(self.VAL_SIZE, max(0, n - train_size))
         random_state = np.random.RandomState(seed=42)
-        perm = random_state.permutation(np.arange(self.TOTAL_SIZE))
-        train_idx, val_idx, test_idx = perm[:self.TRAIN_SIZE], perm[self.TRAIN_SIZE:self.TRAIN_SIZE + self.VAL_SIZE], perm[self.TRAIN_SIZE + self.VAL_SIZE:]
+        perm = random_state.permutation(np.arange(n))
+        train_idx = perm[:train_size]
+        val_idx = perm[train_size:train_size + val_size]
+        test_idx = perm[train_size + val_size:]
 
         if self.split == 'train':
             self.data = [self.data[i] for i in train_idx]
