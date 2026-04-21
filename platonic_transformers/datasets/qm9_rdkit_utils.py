@@ -258,18 +258,33 @@ class ZatomMolecularMetrics(object):
         self.dataset_smiles_set = set(dataset_smiles_list) if dataset_smiles_list else None
 
     def compute_validity(self, generated):
-        """Returns (valid_smiles_list, valid_mol_list, validity)."""
+        """Returns (valid_smiles_list, valid_mol_list, validity).
+
+        valid_mol_list contains the LARGEST-FRAGMENT mol with its original 3D
+        conformer preserved, not a re-parse from SMILES — PoseBusters needs
+        3D coordinates for every one of its geometric checks (bond lengths,
+        bond angles, steric clash, ring flatness, internal energy).
+        """
         valid_smiles, valid_mols = [], []
         for graph in generated:
             mol = build_molecule_zatom_style(*graph[:2], self.dataset_info)
-            s = _largest_frag_smiles(mol, isomeric=True)
-            if s is not None:
-                valid_smiles.append(s)
-                # Re-parse the canonical largest-fragment SMILES so PoseBusters
-                # gets a sanitized RDKit mol in a consistent state.
-                m = Chem.MolFromSmiles(s)
-                if m is not None:
-                    valid_mols.append(m)
+            if mol is None:
+                continue
+            try:
+                Chem.SanitizeMol(mol)
+            except (ValueError, RuntimeError):
+                continue
+            try:
+                frags = Chem.rdmolops.GetMolFrags(mol, asMols=True)
+                largest = max(frags, default=mol, key=lambda m: m.GetNumAtoms())
+                Chem.SanitizeMol(largest)
+                s = Chem.MolToSmiles(largest, isomericSmiles=True)
+            except (ValueError, RuntimeError):
+                continue
+            if s is None:
+                continue
+            valid_smiles.append(s)
+            valid_mols.append(largest)  # keep 3D conformer for PoseBusters
         return valid_smiles, valid_mols, len(valid_smiles) / len(generated)
 
     def compute_uniqueness(self, valid_smiles):
