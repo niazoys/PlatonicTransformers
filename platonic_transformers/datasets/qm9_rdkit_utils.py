@@ -364,29 +364,44 @@ POSEBUSTERS_PAPER_CHECKS = [
 ]
 
 
-def run_posebusters(rdkit_mols):
+def run_posebusters(rdkit_mols, max_molecules: int = 1000, seed: int = 0):
     """Run PoseBusters (config='mol') on a list of sanitized RDKit mols.
 
+    PoseBusters' `internal_energy` check dominates runtime: per molecule it
+    calls RDKit ETKDG to generate an ensemble of conformers plus UFF
+    optimization, which can take several seconds per molecule — running on
+    the full 10k-molecule validation pool stalls training for an hour+ per
+    validation. We therefore sub-sample to `max_molecules` molecules by
+    default. Validity / uniqueness / novelty / stability are still computed
+    over the full pool; only PoseBusters is sub-sampled.
+
     Returns a dict:
-      posebusters_pass_rate    : fraction of input mols that pass ALL seven
+      posebusters_pass_rate    : fraction of sampled mols that pass ALL seven
                                  headline checks (Zatom-1 definition).
-      posebusters/<check>_rate : per-check pass rate.
+      posebusters/<check>_rate : per-check pass rate on the sampled subset.
+      posebusters/num_sampled  : number of molecules actually evaluated.
     If the list is empty, returns zeros so logging never blows up.
     """
     metrics = {f"posebusters/{c}_rate": 0.0 for c in POSEBUSTERS_PAPER_CHECKS}
     metrics["posebusters_pass_rate"] = 0.0
+    metrics["posebusters/num_sampled"] = 0
     if not rdkit_mols:
         return metrics
+
+    # Sub-sample deterministically (seeded) when the pool is too large.
+    if len(rdkit_mols) > max_molecules:
+        rng = np.random.RandomState(seed)
+        idx = rng.choice(len(rdkit_mols), size=max_molecules, replace=False)
+        rdkit_mols = [rdkit_mols[i] for i in idx]
+    metrics["posebusters/num_sampled"] = len(rdkit_mols)
 
     from posebusters import PoseBusters  # imported lazily to avoid startup cost
 
     pb = PoseBusters(config="mol")
     df = pb.bust(mol_pred=rdkit_mols)
-    # Per-check pass rates (columns are booleans from PoseBusters).
     for c in POSEBUSTERS_PAPER_CHECKS:
         if c in df.columns:
             metrics[f"posebusters/{c}_rate"] = float(df[c].mean())
-    # Headline pass rate: all seven paper checks pass for a single molecule.
     paper_cols = [c for c in POSEBUSTERS_PAPER_CHECKS if c in df.columns]
     if paper_cols:
         metrics["posebusters_pass_rate"] = float(df[paper_cols].all(axis=1).mean())
