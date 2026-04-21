@@ -67,7 +67,7 @@ class BasicMolecularMetrics(object):
             unique, uniqueness = self.compute_uniqueness(valid)
             print(f"Uniqueness over {len(valid)} valid molecules: {uniqueness * 100 :.2f}%")
 
-            if self.dataset_smiles_list is not None:
+            if self.dataset_smiles_set is not None:
                 _, novelty = self.compute_novelty(unique)
                 print(f"Novelty over {len(unique)} unique valid molecules: {novelty * 100 :.2f}%")
             else:
