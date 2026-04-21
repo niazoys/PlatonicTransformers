@@ -29,10 +29,15 @@ from platonic_transformers.utils.config_loader import (
 )
 from platonic_transformers.utils.utils import RandomSOd, fully_connected_edge_index, subtract_mean
 
-# Performance optimizations
+# Performance backends (mirrors our OMol training setup).
+# Keep weights/activations in fp32 (diffusion loss weighting is sigma-sensitive and
+# the weighted MSE on positions can be swamped by bf16 rounding at small sigma).
+# TF32 on matmul is fine: fp32 accumulator, truncated operands inside the kernel.
 torch.set_float32_matmul_precision("high")
 torch.backends.cuda.enable_flash_sdp(True)
 torch.backends.cuda.enable_mem_efficient_sdp(True)
+torch.backends.cudnn.benchmark = True
+torch._dynamo.config.recompile_limit = 128  # variable atom count per batch
 
 
 # ---------------------------------------------------------------------------
