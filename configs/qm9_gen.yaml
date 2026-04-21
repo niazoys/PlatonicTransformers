@@ -39,6 +39,7 @@ model:
   freq_init: "spiral"
   use_key: false
   rope_on_values: true              # Public-repo GTA-style RoPE on values
+  compile: true                     # torch.compile the backbone (mandatory for PlatoFormer)
 
 # Diffusion (Karras EDM) configuration
 diffusion:

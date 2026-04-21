@@ -249,6 +249,9 @@ class QM9GenModel(pl.LightningModule):
             time_conditioning=True,
         )
 
+        if getattr(config.model, "compile", True):
+            self.net = torch.compile(self.net)
+
         self.model = EDMPrecond(
             self.net,
             sigma_data=config.diffusion.sigma_data,
@@ -516,7 +519,7 @@ def main(config: ml_collections.ConfigDict) -> None:
     if config.logging.enabled:
         callbacks.append(pl.callbacks.LearningRateMonitor(logging_interval="epoch"))
 
-    trainer = pl.Trainer(
+    trainer_kwargs = dict(
         logger=logger,
         max_epochs=config.training.epochs,
         callbacks=callbacks,
@@ -527,6 +530,14 @@ def main(config: ml_collections.ConfigDict) -> None:
         precision=config.system.precision,
         check_val_every_n_epoch=config.training.check_val_every_n_epoch,
     )
+    # Optional profiling / short-run knobs
+    if config.training.get("max_steps", -1) > 0:
+        trainer_kwargs["max_steps"] = config.training.max_steps
+    if config.training.get("limit_train_batches", 1.0) != 1.0:
+        trainer_kwargs["limit_train_batches"] = config.training.limit_train_batches
+    if config.training.get("limit_val_batches", 1.0) != 1.0:
+        trainer_kwargs["limit_val_batches"] = config.training.limit_val_batches
+    trainer = pl.Trainer(**trainer_kwargs)
 
     test_ckpt = config.testing.test_ckpt
     if test_ckpt is None:
