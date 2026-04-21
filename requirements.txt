@@ -21,6 +21,7 @@ ase-db-backends
 mendeleev
 scikit-learn
 rdkit
+pymatgen     # QM9 generation: PDB-inferred bond utilities
 
 # -- GPU Acceleration (optional, graceful fallback if unavailable) --
 nvidia-dali-cuda120  # GPU-fused data loading for ImageNet
