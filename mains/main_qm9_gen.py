@@ -18,7 +18,10 @@ from tqdm import trange
 
 from platonic_transformers.datasets.qm9 import QM9Dataset, collate_fn
 from platonic_transformers.datasets.qm9_bond_analyze import check_stability
-from platonic_transformers.datasets.qm9_rdkit_utils import BasicMolecularMetrics
+from platonic_transformers.datasets.qm9_rdkit_utils import (
+    BasicMolecularMetrics,
+    compute_training_smiles,
+)
 from platonic_transformers.models.platoformer.groups import PLATONIC_GROUPS
 from platonic_transformers.models.platoformer.platoformer import PlatonicTransformer
 from platonic_transformers.utils.callbacks import TimerCallback
@@ -455,8 +458,13 @@ def load_data(config: ml_collections.ConfigDict):
     )
 
     num_atoms_sampler = train_set.NumAtomsSampler()
-    smiles_list = [train_set[i]["smiles"] for i in range(len(train_set))]
     dataset_info = train_set.dataset_info
+    # Training-set SMILES for novelty must come through the same bond-inference
+    # pipeline (build_molecule + mol2smiles) used for generated molecules —
+    # otherwise protonation / aromaticity differences produce spurious novelty
+    # (matches the EDM protocol). Cached to avoid recomputation.
+    smiles_cache = os.path.join(config.dataset.data_dir, "train_smiles_for_novelty.pkl")
+    smiles_list = compute_training_smiles(train_set, dataset_info, cache_path=smiles_cache)
 
     if config.dataset.dataset_fraction < 1.0:
         subset_len = int(len(train_set) * config.dataset.dataset_fraction)

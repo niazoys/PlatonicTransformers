@@ -1,12 +1,10 @@
 import os
 import pickle
-import tempfile
+from tqdm import tqdm
 
 import numpy as np
 import torch
 from rdkit import Chem
-from rdkit.Chem import rdDetermineBonds
-from rdkit.Chem.inchi import MolToInchiKey
 
 from platonic_transformers.datasets.qm9_bond_analyze import geom_predictor, get_bond_order
 
@@ -20,12 +18,13 @@ class BasicMolecularMetrics(object):
     def __init__(self, dataset_info, dataset_smiles_list=None):
         self.atom_decoder = dataset_info['atom_decoder']
         self.dataset_info = dataset_info
-        # Keep the raw SMILES list (used for logging/debug), and also pre-compute
-        # an InChIKey set of the training molecules so novelty comparison is
-        # invariant to bond-order perception / tautomer / aromaticity differences
-        # between the SDF-derived SMILES and rdDetermineBonds-derived SMILES.
-        self.dataset_smiles_list = dataset_smiles_list
-        self.dataset_inchikey_set = _smiles_list_to_inchikeys(dataset_smiles_list)
+        # dataset_smiles_list is expected to be the set of canonical SMILES obtained
+        # by running the training molecules through the same build_molecule + mol2smiles
+        # pipeline that generated molecules go through. This is how EDM (Hoogeboom et
+        # al. 2022) reports novelty; computing training SMILES via the SDF path
+        # instead produces a ~15% false-novelty floor because the two bond-perception
+        # routes canonicalize differently.
+        self.dataset_smiles_set = set(dataset_smiles_list) if dataset_smiles_list else None
 
     def compute_validity(self, generated):
         """Compute validity following the EDM protocol (Hoogeboom et al. 2022).
@@ -53,36 +52,11 @@ class BasicMolecularMetrics(object):
         return list(set(valid)), len(set(valid)) / len(valid)
 
     def compute_novelty(self, unique):
-        """Compare generated SMILES against the training set.
-
-        Uses the SKELETAL portion of InChIKey (first 14-char block) which
-        ignores protonation and stereo layers. Protonation differences are
-        common between the SDF-stored SMILES (often zwitterionic/protonated)
-        and the rdDetermineBonds-derived SMILES (typically neutral). Using
-        the full InChIKey would misclassify such protonation variants as
-        novel; the skeleton hash matches them correctly.
-
-        Note: there is still a ~5-10% residual false-novelty floor because
-        rdDetermineBonds occasionally infers wrong bond orders from the raw
-        QM9 coordinates. This affects trivial and tetra the same way, so
-        relative comparisons are unaffected.
-        """
-        if not self.dataset_inchikey_set:
-            return list(unique), 1.0  # no reference; everything is "novel"
-        num_novel = 0
-        novel = []
-        for smiles in unique:
-            mol = Chem.MolFromSmiles(smiles)
-            if mol is None:
-                continue
-            key = MolToInchiKey(mol)
-            if not key:
-                continue
-            skeleton = key.split("-")[0]
-            if skeleton not in self.dataset_inchikey_set:
-                novel.append(smiles)
-                num_novel += 1
-        return novel, num_novel / len(unique)
+        """Fraction of unique generated SMILES not in the training set."""
+        if not self.dataset_smiles_set:
+            return list(unique), 1.0
+        novel = [s for s in unique if s not in self.dataset_smiles_set]
+        return novel, len(novel) / len(unique)
 
     def evaluate(self, generated):
         """ generated: list of pairs (positions: n x 3, atom_types: n [int])
@@ -105,23 +79,48 @@ class BasicMolecularMetrics(object):
         return [validity, uniqueness, novelty], unique
 
 
-def _smiles_list_to_inchikeys(smiles_list):
-    """Convert a list of SMILES to a set of skeleton InChIKeys.
+def compute_training_smiles(dataset, dataset_info, cache_path=None, show_progress=True):
+    """Run the training dataset through the EDM build_molecule pipeline to produce
+    a canonical SMILES set. Results are cached on disk to avoid the ~few-minute
+    recomputation cost on every run.
 
-    Returns the first 14-char "skeleton" block of each InChIKey so novelty
-    checks are invariant to protonation and stereo layer differences.
+    Args:
+        dataset: iterable of dict items with keys "pos", "x" (features: one-hot atom
+                 type in first 5 columns, optional charge as 6th).
+        dataset_info: qm9 dataset info dict with atom_decoder.
+        cache_path: optional path for pickle cache. If the file exists and was built
+                    for the same dataset size, it is loaded directly.
+        show_progress: show a tqdm bar while building.
+
+    Returns:
+        set of canonical SMILES strings representing the training molecules as
+        perceived by the evaluator's bond-inference pipeline.
     """
-    if smiles_list is None:
-        return None
-    keys = set()
-    for s in smiles_list:
-        mol = Chem.MolFromSmiles(s)
-        if mol is None:
+    if cache_path and os.path.exists(cache_path):
+        with open(cache_path, "rb") as f:
+            cached = pickle.load(f)
+        if cached.get("size") == len(dataset):
+            return cached["smiles_set"]
+
+    smiles_set = set()
+    iterator = tqdm(dataset, desc="building training SMILES") if show_progress else dataset
+    for item in iterator:
+        at = item["x"][:, :5].argmax(dim=-1)
+        mol = build_molecule(item["pos"], at, dataset_info)
+        s = mol2smiles(mol)
+        if s is None:
             continue
-        k = MolToInchiKey(mol)
-        if k:
-            keys.add(k.split("-")[0])
-    return keys
+        frags = Chem.rdmolops.GetMolFrags(mol, asMols=True)
+        largest = max(frags, default=mol, key=lambda m: m.GetNumAtoms())
+        s = mol2smiles(largest)
+        if s is not None:
+            smiles_set.add(s)
+
+    if cache_path:
+        os.makedirs(os.path.dirname(cache_path), exist_ok=True)
+        with open(cache_path, "wb") as f:
+            pickle.dump({"size": len(dataset), "smiles_set": smiles_set}, f)
+    return smiles_set
 
 
 def mol2smiles(mol):
@@ -131,40 +130,6 @@ def mol2smiles(mol):
         return None
     return Chem.MolToSmiles(mol)
 
-
-def build_molecule_from_xyz(positions, atom_types, dataset_info):
-    """
-    Build an RDKit molecule from 3D coordinates + atom types.
-
-    Uses RDKit's rdDetermineBonds.DetermineBonds which infers both connectivity
-    and bond orders from interatomic distances and valence constraints. No
-    external dependency on OpenBabel/pymatgen.
-    """
-    atom_decoder = dataset_info["atom_decoder"]
-    atomic_symbols = [atom_decoder[atom.item()] for atom in atom_types]
-    pos_numpy = positions.detach().cpu().numpy()
-
-    # Build a minimal XYZ block (first line = atom count, second = comment, then rows).
-    lines = [str(len(atomic_symbols)), ""]
-    for sym, (x, y, z) in zip(atomic_symbols, pos_numpy):
-        lines.append(f"{sym} {float(x):.6f} {float(y):.6f} {float(z):.6f}")
-    xyz_block = "\n".join(lines) + "\n"
-
-    try:
-        mol = Chem.MolFromXYZBlock(xyz_block)
-        if mol is None:
-            return None
-        # DetermineBonds mutates mol in place: adds bonds + bond orders.
-        # QM9 molecules are all neutral.
-        rdDetermineBonds.DetermineBonds(mol, charge=0)
-        return mol
-    except Exception:
-        return None
-
-
-# The original build_molecule and build_xae_molecule functions are kept below
-# in case they are used by other parts of your project, but they are no longer
-# called by the BasicMolecularMetrics.evaluate() flow.
 
 def build_molecule(positions, atom_types, dataset_info):
     atom_decoder = dataset_info["atom_decoder"]
