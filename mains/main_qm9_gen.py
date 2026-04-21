@@ -37,7 +37,7 @@ from platonic_transformers.utils.utils import RandomSOd, fully_connected_edge_in
 torch.backends.cuda.enable_flash_sdp(True)
 torch.backends.cuda.enable_mem_efficient_sdp(True)
 torch.backends.cudnn.benchmark = True
-torch._dynamo.config.recompile_limit = 128  # variable atom count per batch
+torch._dynamo.config.cache_size_limit = 128  # variable atom count per batch
 
 
 # ---------------------------------------------------------------------------
