@@ -28,25 +28,24 @@ class BasicMolecularMetrics(object):
         self.dataset_inchikey_set = _smiles_list_to_inchikeys(dataset_smiles_list)
 
     def compute_validity(self, generated):
-        """
-        Compute validity of a list of generated molecules.
-        Uses RDKit's rdDetermineBonds to infer bond orders from 3D coordinates.
+        """Compute validity following the EDM protocol (Hoogeboom et al. 2022).
+
+        Bond graph is built from 3D coordinates + atom types using the bond-
+        length lookup table in qm9_bond_analyze (same as check_stability).
+        Molecule is then sanitized; largest connected fragment's canonical
+        SMILES is retained as the valid representative.
         """
         valid = []
-
         for graph in generated:
-            mol = build_molecule_from_xyz(*graph[:2], self.dataset_info)
-            if mol is None:
-                continue
-
+            mol = build_molecule(*graph[:2], self.dataset_info)
             smiles = mol2smiles(mol)
+            if smiles is None:
+                continue
+            mol_frags = Chem.rdmolops.GetMolFrags(mol, asMols=True)
+            largest_mol = max(mol_frags, default=mol, key=lambda m: m.GetNumAtoms())
+            smiles = mol2smiles(largest_mol)
             if smiles is not None:
-                mol_frags = Chem.rdmolops.GetMolFrags(mol, asMols=True)
-                largest_mol = max(mol_frags, default=mol, key=lambda m: m.GetNumAtoms())
-                smiles = mol2smiles(largest_mol)
-                if smiles is not None:
-                    valid.append(smiles)
-
+                valid.append(smiles)
         return valid, len(valid) / len(generated)
 
     def compute_uniqueness(self, valid):
