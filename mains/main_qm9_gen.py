@@ -12,6 +12,7 @@ import numpy as np
 import pytorch_lightning as pl
 import torch
 from pytorch_lightning.callbacks import Timer
+from rdkit import Chem  # used for PDB serialization when logging wandb.Molecule
 from torch.optim.lr_scheduler import CosineAnnealingLR
 from torch.utils.data import DataLoader
 from tqdm import trange
@@ -468,7 +469,52 @@ class QM9GenModel(pl.LightningModule):
                 "novelty_zatom": z["novelty"],
             })
             results.update(run_posebusters(z["valid_mols"]))
+
+            # Log a handful of sampled 3D molecules to wandb so we can watch
+            # the qualitative output evolve. Each log entry is a PDB string
+            # (~1-2 KB) so even ~20 full validations x 8 mols = ~160 KB total.
+            self._log_sample_molecules(z["valid_mols"], n=8)
         return results
+
+    def _log_sample_molecules(self, valid_mols, n: int = 8) -> None:
+        """Log up to n 3D molecule samples to wandb as an interactive viewer.
+
+        Silent no-op when either (a) the active logger is not a WandB logger,
+        or (b) wandb / Chem.MolToPDBBlock misbehave — visualization should
+        never block training.
+        """
+        if not valid_mols:
+            return
+        logger = self.trainer.logger if self.trainer is not None else None
+        if logger is None or not hasattr(logger, "experiment"):
+            return
+        experiment = logger.experiment
+        # WandB runs expose `.log` with a dict accepting wandb.Molecule entries;
+        # non-WandB experiment objects may not support this so we guard the import.
+        try:
+            import wandb
+            if not hasattr(experiment, "log"):
+                return
+            mols_to_log = valid_mols[:n]
+            wandb_mols = []
+            for m in mols_to_log:
+                pdb = Chem.MolToPDBBlock(m)
+                # wandb.Molecule.from_rdkit is new; fall back to PDB text via a
+                # temporary file which every wandb version accepts.
+                import tempfile
+                with tempfile.NamedTemporaryFile(
+                    mode="w", suffix=".pdb", delete=False
+                ) as fh:
+                    fh.write(pdb)
+                    path = fh.name
+                wandb_mols.append(wandb.Molecule(path))
+            experiment.log({
+                "samples/zatom_valid_molecules": wandb_mols,
+                "samples/epoch": int(self.current_epoch),
+            })
+        except Exception as e:
+            # Don't let logging kill training.
+            print(f"[warn] wandb molecule logging skipped: {e}")
 
 
 # ---------------------------------------------------------------------------
