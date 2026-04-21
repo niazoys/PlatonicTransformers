@@ -91,6 +91,7 @@ system:
   enable_progress_bar: true
   timer: null                       # e.g. "00:08:00:00" for SLURM time limit
   precision: "32"
+  float32_matmul_precision: "high"  # "highest" (pure fp32), "high" (TF32), "medium" (bf16 operands)
 
 # Testing / checkpointing
 testing:

@@ -32,8 +32,8 @@ from platonic_transformers.utils.utils import RandomSOd, fully_connected_edge_in
 # Performance backends (mirrors our OMol training setup).
 # Keep weights/activations in fp32 (diffusion loss weighting is sigma-sensitive and
 # the weighted MSE on positions can be swamped by bf16 rounding at small sigma).
-# TF32 on matmul is fine: fp32 accumulator, truncated operands inside the kernel.
-torch.set_float32_matmul_precision("high")
+# Matmul precision is set per-run from config.system.float32_matmul_precision
+# ("highest" = fp32 operands, "high" = TF32, "medium" = bf16 operands, fp32 accumulator).
 torch.backends.cuda.enable_flash_sdp(True)
 torch.backends.cuda.enable_mem_efficient_sdp(True)
 torch.backends.cudnn.benchmark = True
@@ -491,6 +491,7 @@ def load_data(config: ml_collections.ConfigDict):
 
 def main(config: ml_collections.ConfigDict) -> None:
     print_config(config, "QM9 Generation Configuration")
+    torch.set_float32_matmul_precision(config.system.get("float32_matmul_precision", "high"))
     pl.seed_everything(config.seed)
 
     train_loader, val_loader, num_atoms_sampler, smiles_list, dataset_info = load_data(config)
