@@ -99,6 +99,11 @@ class PlatonicBlock(nn.Module):
         drop_path (float): Stochastic depth rate. Default: 0.0.
         layer_scale_init_value (Optional[float]): Initial value for LayerScale. If None,
                                                   LayerScale is not used. Default: None.
+        conditioning_dim (Optional[int]): If set, enables DiT-style AdaLN modulation.
+                                          The block expects a per-graph conditioning tensor
+                                          of shape (B, conditioning_dim) in forward().
+                                          Shift/scale/gate are shared across the group axis
+                                          to preserve equivariance. Default: None.
         **kwargs: Additional keyword arguments for the PlatonicConv layer
                   (e.g., freq_sigma, learned_freqs, avg_pool).
     """
@@ -112,7 +117,6 @@ class PlatonicBlock(nn.Module):
         activation: Callable[[Tensor], Tensor] = F.gelu,
         layer_norm_eps: float = 1e-5,
         norm_type: str = "layernorm",
-        norm_first: bool = True,
         spatial_dims: int = 3,
         drop_path: float = 0.0,
         layer_scale_init_value: Optional[float] = None,
@@ -123,13 +127,13 @@ class PlatonicBlock(nn.Module):
         attention: bool = False,
         use_key: bool = False,
         rope_on_values: bool = False,
+        conditioning_dim: Optional[int] = None,
     ) -> None:
         super().__init__()
 
         # --- Group and Dimension Setup ---
         self.group = PLATONIC_GROUPS[solid_name.lower()]
         self.num_G = self.group.G
-        self.norm_first = norm_first
 
         # Validate total dimensions against group size and heads
         if d_model % self.num_G != 0:
@@ -183,6 +187,21 @@ class PlatonicBlock(nn.Module):
         self.gamma_1 = nn.Parameter(layer_scale_init_value * torch.ones((self.dim_per_g)), requires_grad=True) if layer_scale_init_value is not None else None
         self.gamma_2 = nn.Parameter(layer_scale_init_value * torch.ones((self.dim_per_g)), requires_grad=True) if layer_scale_init_value is not None else None
 
+        # --- AdaLN modulation for diffusion-style conditioning ---
+        # Output is 6 * dim_per_g (not 6 * d_model): shift/scale/gate are shared
+        # across the group axis to commute with the group action, as with LayerScale.
+        # Zero-init: at step 0 the block acts as identity (gate=0, scale=0, shift=0).
+        self.conditioning_dim = conditioning_dim
+        if conditioning_dim is not None:
+            self.adaLN_modulation = nn.Sequential(
+                nn.SiLU(),
+                nn.Linear(conditioning_dim, 6 * self.dim_per_g, bias=True),
+            )
+            nn.init.zeros_(self.adaLN_modulation[-1].weight)
+            nn.init.zeros_(self.adaLN_modulation[-1].bias)
+        else:
+            self.adaLN_modulation = None
+
 
     def forward(
         self,
@@ -190,6 +209,7 @@ class PlatonicBlock(nn.Module):
         pos: Tensor,
         batch: Optional[Tensor] = None,
         mask: Optional[Tensor] = None,
+        conditioning: Optional[Tensor] = None,
         avg_num_nodes = 1.0
     ) -> Tensor:
         """
@@ -198,26 +218,66 @@ class PlatonicBlock(nn.Module):
             pos (Tensor): Position tensor of shape [..., D_spatial].
             batch (Optional[Tensor]): For graph mode. Batch index for each element.
             mask (Optional[Tensor]): For dense mode. Boolean mask.
+            conditioning (Optional[Tensor]): Per-graph conditioning of shape (B, conditioning_dim).
+                Only used if this block was built with conditioning_dim set.
         Returns:
             Tensor: Output feature tensor of the same shape [..., G*C].
         """
+        # Compute AdaLN modulation parameters (if conditioning is active)
+        shift_msa = scale_msa = gate_msa = shift_ffn = scale_ffn = gate_ffn = None
+        if self.adaLN_modulation is not None and conditioning is not None:
+            cond_params = self.adaLN_modulation(conditioning)  # (B, 6*C)
+            shift_msa, scale_msa, gate_msa, shift_ffn, scale_ffn, gate_ffn = [
+                self._broadcast_cond(chunk, x, batch)
+                for chunk in cond_params.chunk(6, dim=-1)
+            ]
+
         # Interaction Block (pre-normalization is always used)
         normed_x = self._normalize(x, self.norm1)
+        normed_x = self._apply_shift_scale(normed_x, shift_msa, scale_msa)
         interaction_out = self._interaction_block(normed_x, pos, batch, mask, avg_num_nodes)
         if self.gamma_1 is not None:
             interaction_out = self._apply_layer_scale(interaction_out, self.gamma_1)
         residual = self.drop_path1(interaction_out)
-        x = x + residual
+        x = x + (gate_msa * residual if gate_msa is not None else residual)
 
         # Feed-Forward Block (pre-normalization is always used)
         normed_ff = self._normalize(x, self.norm2)
+        normed_ff = self._apply_shift_scale(normed_ff, shift_ffn, scale_ffn)
         ff_output = self._ff_block(normed_ff)
         if self.gamma_2 is not None:
             ff_output = self._apply_layer_scale(ff_output, self.gamma_2)
         residual = self.drop_path2(ff_output)
-        x = x + residual
-        
+        x = x + (gate_ffn * residual if gate_ffn is not None else residual)
+
         return x
+
+    def _broadcast_cond(self, param: Tensor, x: Tensor, batch: Optional[Tensor]) -> Tensor:
+        """Broadcast a (B, C) conditioning chunk to match features of shape (..., G*C).
+
+        The chunk is shared across the group axis to preserve equivariance: the group
+        acts by permuting G, so the modulation must be constant across G to commute
+        with the action. Output shape matches x for elementwise combination.
+        """
+        param = param.to(dtype=x.dtype)  # (B, C)
+        # Expand across group axis: (B, C) -> (B, G, C) -> (B, G*C)
+        param_gc = param[:, None, :].expand(-1, self.num_G, -1).reshape(param.shape[0], -1)
+        if x.dim() == 3:
+            # Dense mode: x is (B, N, G*C). Insert node axis: (B, 1, G*C).
+            return param_gc.unsqueeze(1)
+        if x.dim() == 2:
+            # Sparse mode: x is (N, G*C). Index by batch: (N, G*C).
+            if batch is None:
+                raise ValueError("Batch indices are required for sparse-mode conditioning.")
+            return param_gc[batch]
+        raise ValueError(f"Unsupported tensor rank {x.dim()} for conditioning broadcast.")
+
+    @staticmethod
+    def _apply_shift_scale(x: Tensor, shift: Optional[Tensor], scale: Optional[Tensor]) -> Tensor:
+        """Apply AdaLN shift/scale: x * (1 + scale) + shift. No-op if both None."""
+        if shift is None or scale is None:
+            return x
+        return x * (1 + scale) + shift
 
     def _apply_layer_scale(self, x: Tensor, gamma: Tensor) -> Tensor:
         """Apply LayerScale gamma (C,) to features (..., G*C), shared across G."""
