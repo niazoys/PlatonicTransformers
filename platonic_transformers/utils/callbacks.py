@@ -23,16 +23,28 @@ class TimerCallback(pl.Callback):
     def on_train_start(self, trainer: pl.Trainer, pl_module: pl.LightningModule) -> None:
         self.total_training_start_time = time.time()
 
+    def _log_metric(self, trainer: pl.Trainer, name: str, value: float) -> None:
+        """Send a single scalar via whichever logger is active (or skip if none)."""
+        logger = trainer.logger
+        if logger is None:
+            return
+        exp = getattr(logger, "experiment", None)
+        if exp is not None and hasattr(exp, "log"):
+            exp.log({name: value})
+        else:
+            # TensorBoard SummaryWriter fallback (offline Lightning default).
+            logger.log_metrics({name: value})
+
     def on_train_end(self, trainer: pl.Trainer, pl_module: pl.LightningModule) -> None:
         total_training_time = (time.time() - self.total_training_start_time) / 60
-        trainer.logger.experiment.log({"Total Training Time (min)": total_training_time})
+        self._log_metric(trainer, "Total Training Time (min)", total_training_time)
 
     def on_test_epoch_start(self, trainer: pl.Trainer, pl_module: pl.LightningModule) -> None:
         self.epoch_start_time = time.time()
 
     def on_test_epoch_end(self, trainer: pl.Trainer, pl_module: pl.LightningModule) -> None:
         self.test_inference_time = (time.time() - self.epoch_start_time) / 60
-        trainer.logger.experiment.log({"Test Inference Time (min)": self.test_inference_time})
+        self._log_metric(trainer, "Test Inference Time (min)", self.test_inference_time)
 
 
 class StopOnPersistentDivergence(pl.Callback):
