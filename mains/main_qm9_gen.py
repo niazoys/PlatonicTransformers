@@ -20,7 +20,10 @@ from platonic_transformers.datasets.qm9 import QM9Dataset, collate_fn
 from platonic_transformers.datasets.qm9_bond_analyze import check_stability
 from platonic_transformers.datasets.qm9_rdkit_utils import (
     BasicMolecularMetrics,
+    ZatomMolecularMetrics,
     compute_training_smiles,
+    compute_training_smiles_zatom,
+    run_posebusters,
 )
 from platonic_transformers.models.platoformer.groups import PLATONIC_GROUPS
 from platonic_transformers.models.platoformer.platoformer import PlatonicTransformer
@@ -276,13 +279,19 @@ class QM9GenModel(pl.LightningModule):
         self.rotation_generator = RandomSOd(3)
 
         self.num_atoms_sampler = None
-        self.molecule_analyzer = None
+        self.edm_analyzer = None
+        self.zatom_analyzer = None
 
     def set_num_atoms_sampler(self, num_atoms_sampler):
         self.num_atoms_sampler = num_atoms_sampler
 
-    def init_molecule_analyzer(self, dataset_info, smiles_list):
-        self.molecule_analyzer = BasicMolecularMetrics(dataset_info, smiles_list)
+    def init_molecule_analyzer(self, dataset_info, edm_smiles_list, zatom_smiles_list):
+        """Build both metric analyzers. See qm9_rdkit_utils module docstring
+        for the two protocols (EDM and Zatom-1) and the clearly-documented
+        deviation from Zatom-1 (we substitute RDKit's PDB writer for
+        pymatgen+OpenBabel)."""
+        self.edm_analyzer = BasicMolecularMetrics(dataset_info, edm_smiles_list)
+        self.zatom_analyzer = ZatomMolecularMetrics(dataset_info, zatom_smiles_list)
 
     def training_step(self, batch, batch_idx):
         if self.config.training.train_augm:
@@ -405,10 +414,19 @@ class QM9GenModel(pl.LightningModule):
     def run_validation_sampling(
         self, num_molecules: int = 10000, batch_size: int = 100, rdkit_metrics: bool = True
     ) -> dict:
-        """Generate molecules and compute stability + (optionally) RDKit metrics."""
-        if self.molecule_analyzer is None and rdkit_metrics:
+        """Generate molecules and compute stability (always) + RDKit/PoseBusters
+        metrics (only when rdkit_metrics=True).
+
+        Returns a flat dict of scalars. When rdkit_metrics is True we compute
+        two parallel protocols in the same pass:
+          - `*_edm`   : EDM (Hoogeboom et al. 2022) distance-table bonds with H.
+          - `*_zatom` : Zatom-1 (arXiv:2602.22251) PDB-roundtrip bonds, no H.
+        plus `posebusters_pass_rate` and per-check PoseBusters pass rates
+        reported by the Zatom-1 paper (run on the sanitized Zatom-style mols).
+        """
+        if rdkit_metrics and (self.edm_analyzer is None or self.zatom_analyzer is None):
             raise RuntimeError(
-                "molecule_analyzer not initialized; call init_molecule_analyzer()."
+                "Molecular analyzers not initialized; call init_molecule_analyzer()."
             )
 
         steps = max(1, num_molecules // batch_size)
@@ -418,7 +436,7 @@ class QM9GenModel(pl.LightningModule):
             molecules += self.sample(batch_size)
         avg_time_per_molecule = (time.time() - t0) / max(1, len(molecules))
 
-        # Stability
+        # Stability (EDM, always computed — cheap and the headline metric)
         count_atm_stable = count_atm_total = count_mol_stable = count_mol_total = 0
         for mol in molecules:
             is_stable, nr_stable, total = check_stability(*mol)
@@ -434,13 +452,22 @@ class QM9GenModel(pl.LightningModule):
         }
 
         if rdkit_metrics:
-            [validity, uniqueness, novelty], _ = self.molecule_analyzer.evaluate(molecules)
+            # EDM-flavor validity/uniqueness/novelty
+            [v_e, u_e, n_e], _ = self.edm_analyzer.evaluate(molecules)
             results.update({
-                "validity": validity,
-                "uniqueness": uniqueness,
-                "novelty": novelty,
-                "discovery": validity * uniqueness * novelty,
+                "validity_edm": v_e,
+                "uniqueness_edm": u_e,
+                "novelty_edm": n_e,
             })
+
+            # Zatom-1-flavor validity/uniqueness/novelty + PoseBusters
+            z = self.zatom_analyzer.evaluate(molecules)
+            results.update({
+                "validity_zatom": z["validity"],
+                "uniqueness_zatom": z["uniqueness"],
+                "novelty_zatom": z["novelty"],
+            })
+            results.update(run_posebusters(z["valid_mols"]))
         return results
 
 
@@ -460,11 +487,16 @@ def load_data(config: ml_collections.ConfigDict):
     num_atoms_sampler = train_set.NumAtomsSampler()
     dataset_info = train_set.dataset_info
     # Training-set SMILES for novelty must come through the same bond-inference
-    # pipeline (build_molecule + mol2smiles) used for generated molecules —
-    # otherwise protonation / aromaticity differences produce spurious novelty
-    # (matches the EDM protocol). Cached to avoid recomputation.
-    smiles_cache = os.path.join(config.dataset.data_dir, "train_smiles_for_novelty.pkl")
-    smiles_list = compute_training_smiles(train_set, dataset_info, cache_path=smiles_cache)
+    # pipeline that generated molecules go through, otherwise protonation /
+    # aromaticity differences between the SDF-derived SMILES and the evaluator
+    # SMILES produce spurious novelty. We build one reference set per protocol:
+    #   * EDM     : distance-table bonds, keep H, non-isomeric canonical SMILES.
+    #   * Zatom-1 : PDB-roundtrip bonds, removeHs=True, isomeric SMILES.
+    # Both are cached on disk so this only runs once per dataset.
+    edm_cache = os.path.join(config.dataset.data_dir, "train_smiles_edm.pkl")
+    zatom_cache = os.path.join(config.dataset.data_dir, "train_smiles_zatom.pkl")
+    edm_smiles_list = compute_training_smiles(train_set, dataset_info, cache_path=edm_cache)
+    zatom_smiles_list = compute_training_smiles_zatom(train_set, dataset_info, cache_path=zatom_cache)
 
     if config.dataset.dataset_fraction < 1.0:
         subset_len = int(len(train_set) * config.dataset.dataset_fraction)
@@ -489,7 +521,14 @@ def load_data(config: ml_collections.ConfigDict):
         collate_fn=collate_fn,
     )
 
-    return train_loader, val_loader, num_atoms_sampler, smiles_list, dataset_info
+    return (
+        train_loader,
+        val_loader,
+        num_atoms_sampler,
+        edm_smiles_list,
+        zatom_smiles_list,
+        dataset_info,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -502,7 +541,14 @@ def main(config: ml_collections.ConfigDict) -> None:
     torch.set_float32_matmul_precision(config.system.get("float32_matmul_precision", "high"))
     pl.seed_everything(config.seed)
 
-    train_loader, val_loader, num_atoms_sampler, smiles_list, dataset_info = load_data(config)
+    (
+        train_loader,
+        val_loader,
+        num_atoms_sampler,
+        edm_smiles_list,
+        zatom_smiles_list,
+        dataset_info,
+    ) = load_data(config)
 
     if config.system.gpus > 0 and torch.cuda.is_available():
         accelerator = "gpu"
@@ -557,14 +603,14 @@ def main(config: ml_collections.ConfigDict) -> None:
     if test_ckpt is None:
         model = QM9GenModel(config)
         model.set_num_atoms_sampler(num_atoms_sampler)
-        model.init_molecule_analyzer(dataset_info, smiles_list)
+        model.init_molecule_analyzer(dataset_info, edm_smiles_list, zatom_smiles_list)
         trainer.fit(model, train_loader, val_loader, ckpt_path=config.testing.resume_ckpt)
         best_ckpt = callbacks[0].best_model_path or "last"
         trainer.test(model, val_loader, ckpt_path=best_ckpt)
     else:
         model = QM9GenModel.load_from_checkpoint(test_ckpt)
         model.set_num_atoms_sampler(num_atoms_sampler)
-        model.init_molecule_analyzer(dataset_info, smiles_list)
+        model.init_molecule_analyzer(dataset_info, edm_smiles_list, zatom_smiles_list)
         trainer.test(model, val_loader)
 
 
