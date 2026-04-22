@@ -40,7 +40,7 @@ model:
   use_key: false
   rope_on_values: true              # Public-repo GTA-style RoPE on values
   compile: true                     # torch.compile the backbone (mandatory for PlatoFormer)
-  attention_backend: "scatter"      # "scatter" (default, fp32) | "flash" (flash-attn varlen, bf16 inside attention)
+  attention_backend: "flash"        # "scatter" (fp32 fallback) | "flash" (faster, sidesteps scatter-path compile bugs)
 
 # Diffusion (Karras EDM) configuration
 diffusion:
@@ -59,18 +59,23 @@ diffusion:
 
 # Training configuration
 training:
-  epochs: 400
+  epochs: 200
   batch_size: 96
   gradient_clip_val: 0.5
   train_augm: true                  # SO(3) rotation augmentation
   validation_frequency: 20          # Run full (10k-sample) validation every N epochs
   check_val_every_n_epoch: 1        # Run (cheap) val-loss every epoch
+  # Exponential Moving Average of weights (standard for diffusion training;
+  # without it long QM9-gen runs mode-collapsed around epoch 200).
+  ema_enabled: true
+  ema_decay: 0.9999
+  ema_warmup_steps: 2000
 
 # Optimizer configuration
 optimizer:
   name: "adamw"
   lr: 5.0e-4
-  weight_decay: 1.0e-8
+  weight_decay: 1.0e-6
 
 # Scheduler configuration
 scheduler:

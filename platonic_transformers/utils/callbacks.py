@@ -47,6 +47,122 @@ class TimerCallback(pl.Callback):
         self._log_metric(trainer, "Test Inference Time (min)", self.test_inference_time)
 
 
+class EMACallback(pl.Callback):
+    """Maintain an exponential moving average of the model's trainable weights.
+
+    Standard practice in diffusion-model training (EDM, EDM2, DiT, ADiT):
+    keep a shadow copy of the weights updated as
+        ema_theta <- decay * ema_theta + (1 - decay) * theta
+    after every training batch, and use the EMA weights for validation /
+    test / sampling. Without this, the online weights drift at long
+    horizons and generation quality degrades even while the training loss
+    looks fine. We were missing it; at epoch ~200 of QM9-gen the model
+    mode-collapsed from 93% molecule-stability down to 0% — classic
+    no-EMA-divergence signature.
+
+    Implementation details:
+    - State is kept in fp32 regardless of the training precision, for
+      numerical stability across long runs.
+    - During warmup_steps, the effective decay is ramped from 0 to
+      `decay`, so early (high-learning-rate) weights don't dominate the
+      EMA forever.
+    - At validation_start / test_start we swap EMA weights INTO the live
+      model and save the online weights; at validation_end / test_end
+      we swap them back. If a validation / test crashes between the
+      hooks, the model is left holding EMA weights — a subsequent
+      training step would overwrite them, so this is safe.
+    - State is saved to / loaded from Lightning checkpoints via the
+      callback state hooks.
+    """
+
+    def __init__(self, decay: float = 0.9999, warmup_steps: int = 2000) -> None:
+        super().__init__()
+        self.decay = decay
+        self.warmup_steps = warmup_steps
+        self._ema_state: Optional[dict] = None
+        self._saved_online_state: Optional[dict] = None
+
+    # ---- helpers ----
+    def _iter_trainable(self, pl_module: pl.LightningModule):
+        for name, p in pl_module.named_parameters():
+            if p.requires_grad:
+                yield name, p
+
+    def _init_ema(self, pl_module: pl.LightningModule) -> None:
+        self._ema_state = {
+            name: p.detach().clone().float()
+            for name, p in self._iter_trainable(pl_module)
+        }
+
+    def _effective_decay(self, global_step: int) -> float:
+        if self.warmup_steps > 0 and global_step < self.warmup_steps:
+            # Slow start: effective decay = min(decay, 1 - 1/(step+1))
+            return min(self.decay, 1.0 - 1.0 / (global_step + 1))
+        return self.decay
+
+    # ---- Lightning hooks ----
+    def on_train_batch_end(self, trainer: pl.Trainer, pl_module: pl.LightningModule,
+                           outputs: Any, batch: Any, batch_idx: int) -> None:
+        if self._ema_state is None:
+            self._init_ema(pl_module)
+        d = self._effective_decay(trainer.global_step)
+        with torch.no_grad():
+            for name, p in self._iter_trainable(pl_module):
+                ema_p = self._ema_state.get(name)
+                if ema_p is None:
+                    # A new parameter appeared mid-run (shouldn't happen for us).
+                    self._ema_state[name] = p.detach().clone().float()
+                    continue
+                # ema_p = decay * ema_p + (1 - decay) * p
+                ema_p.mul_(d).add_(p.detach().float(), alpha=1.0 - d)
+
+    def _swap_in(self, pl_module: pl.LightningModule) -> None:
+        if self._ema_state is None:
+            return
+        self._saved_online_state = {}
+        with torch.no_grad():
+            for name, p in self._iter_trainable(pl_module):
+                self._saved_online_state[name] = p.detach().clone()
+                ema_p = self._ema_state.get(name)
+                if ema_p is not None:
+                    p.data.copy_(ema_p.to(p.dtype).to(p.device))
+
+    def _swap_out(self, pl_module: pl.LightningModule) -> None:
+        if self._saved_online_state is None:
+            return
+        with torch.no_grad():
+            for name, p in self._iter_trainable(pl_module):
+                saved = self._saved_online_state.get(name)
+                if saved is not None:
+                    p.data.copy_(saved)
+        self._saved_online_state = None
+
+    def on_validation_start(self, trainer: pl.Trainer, pl_module: pl.LightningModule) -> None:
+        self._swap_in(pl_module)
+
+    def on_validation_end(self, trainer: pl.Trainer, pl_module: pl.LightningModule) -> None:
+        self._swap_out(pl_module)
+
+    def on_test_start(self, trainer: pl.Trainer, pl_module: pl.LightningModule) -> None:
+        self._swap_in(pl_module)
+
+    def on_test_end(self, trainer: pl.Trainer, pl_module: pl.LightningModule) -> None:
+        self._swap_out(pl_module)
+
+    # ---- checkpoint persistence ----
+    def state_dict(self) -> dict:
+        return {
+            "decay": self.decay,
+            "warmup_steps": self.warmup_steps,
+            "ema_state": self._ema_state,
+        }
+
+    def load_state_dict(self, state_dict: dict) -> None:
+        self.decay = float(state_dict.get("decay", self.decay))
+        self.warmup_steps = int(state_dict.get("warmup_steps", self.warmup_steps))
+        self._ema_state = state_dict.get("ema_state", None)
+
+
 class StopOnPersistentDivergence(pl.Callback):
     """Stop training when a monitored metric exceeds a threshold for too long."""
 

@@ -28,7 +28,7 @@ from platonic_transformers.datasets.qm9_rdkit_utils import (
 )
 from platonic_transformers.models.platoformer.groups import PLATONIC_GROUPS
 from platonic_transformers.models.platoformer.platoformer import PlatonicTransformer
-from platonic_transformers.utils.callbacks import TimerCallback
+from platonic_transformers.utils.callbacks import EMACallback, TimerCallback
 from platonic_transformers.utils.config_loader import (
     get_arg_parser,
     load_with_defaults,
@@ -625,6 +625,11 @@ def main(config: ml_collections.ConfigDict) -> None:
         ),
         TimerCallback(),
     ]
+    if config.training.get("ema_enabled", False):
+        callbacks.append(EMACallback(
+            decay=config.training.get("ema_decay", 0.9999),
+            warmup_steps=config.training.get("ema_warmup_steps", 2000),
+        ))
     if config.system.timer is not None:
         callbacks.append(Timer(duration=config.system.timer))
     if config.logging.enabled:
