@@ -40,6 +40,7 @@ model:
   use_key: false
   rope_on_values: true              # Public-repo GTA-style RoPE on values
   compile: true                     # torch.compile the backbone (mandatory for PlatoFormer)
+  attention_backend: "scatter"      # "scatter" (default, fp32) | "flash" (flash-attn varlen, bf16 inside attention)
 
 # Diffusion (Karras EDM) configuration
 diffusion:

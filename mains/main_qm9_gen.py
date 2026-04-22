@@ -258,6 +258,7 @@ class QM9GenModel(pl.LightningModule):
             freq_init=config.model.freq_init,
             use_key=config.model.use_key,
             rope_on_values=config.model.rope_on_values,
+            attention_backend=config.model.get("attention_backend", "scatter"),
             time_conditioning=True,
         )
 

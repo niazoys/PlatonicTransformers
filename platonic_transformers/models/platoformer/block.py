@@ -127,6 +127,7 @@ class PlatonicBlock(nn.Module):
         attention: bool = False,
         use_key: bool = False,
         rope_on_values: bool = False,
+        attention_backend: str = "scatter",
         conditioning_dim: Optional[int] = None,
     ) -> None:
         super().__init__()
@@ -161,6 +162,7 @@ class PlatonicBlock(nn.Module):
             attention=attention,
             use_key=use_key,
             rope_on_values=rope_on_values,
+            attention_backend=attention_backend,
         )
 
         # Equivariant Feed-Forward Network
