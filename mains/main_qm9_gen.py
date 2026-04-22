@@ -169,8 +169,13 @@ def edm_sampler(
     S_min: float = 0.0,
     S_max: float = float("inf"),
     S_noise: float = 1.0,
-) -> Tuple[torch.Tensor, torch.Tensor]:
-    """Karras Euler-Maruyama sampler with second-order correction."""
+    return_trajectory: bool = False,
+):
+    """Karras Euler-Maruyama sampler with second-order correction.
+
+    If return_trajectory=True, additionally returns a list of
+    (x, pos) snapshots at each sampler step (on CPU) for visualization.
+    """
     sigma_min = max(sigma_min, net.sigma_min)
     sigma_max = min(sigma_max, net.sigma_max)
     num_graphs = int(batch.max().item()) + 1
@@ -183,6 +188,7 @@ def edm_sampler(
     t_steps = torch.cat([t_steps, torch.zeros_like(t_steps[:1])])
 
     x_next, pos_next = x_0 * t_steps[0], pos_0 * t_steps[0]
+    trajectory = [(x_next.detach().cpu(), pos_next.detach().cpu())] if return_trajectory else None
 
     for i, (t_cur, t_next) in enumerate(zip(t_steps[:-1], t_steps[1:])):
         x_cur, pos_cur = x_next, pos_next
@@ -205,7 +211,12 @@ def edm_sampler(
             x_next = x_hat + (t_next - t_hat) * (0.5 * dx_cur + 0.5 * dx_prime)
             pos_next = pos_hat + (t_next - t_hat) * (0.5 * dpos_cur + 0.5 * dpos_prime)
 
+        if return_trajectory:
+            trajectory.append((x_next.detach().cpu(), pos_next.detach().cpu()))
+
     pos_next = subtract_mean(pos_next, batch)
+    if return_trajectory:
+        return x_next, pos_next, trajectory
     return x_next, pos_next
 
 
@@ -475,6 +486,13 @@ class QM9GenModel(pl.LightningModule):
             # the qualitative output evolve. Each log entry is a PDB string
             # (~1-2 KB) so even ~20 full validations x 8 mols = ~160 KB total.
             self._log_sample_molecules(z["valid_mols"], n=8)
+
+            # Log denoising trajectories for a few molecules — a multi-MODEL
+            # PDB file is rendered by wandb's 3dmol.js viewer as a step-slider,
+            # letting us scrub from pure noise (step 0) to the final sample
+            # (step N). This is a separate extra call to self.sample(); adds
+            # about one extra batch of sampling work per full validation.
+            self._log_denoising_animations(n_molecules=4, n_frames=26)
         return results
 
     def _log_sample_molecules(self, valid_mols, n: int = 8) -> None:
@@ -516,6 +534,113 @@ class QM9GenModel(pl.LightningModule):
         except Exception as e:
             # Don't let logging kill training.
             print(f"[warn] wandb molecule logging skipped: {e}")
+
+    def _log_denoising_animations(self, n_molecules: int = 4, n_frames: int = 26) -> None:
+        """Log denoising trajectories (pure noise -> final sample) as multi-MODEL
+        PDB files for wandb's 3dmol.js viewer to render as an animation.
+
+        Runs `self.sample(n_molecules, return_trajectory=True)` and slices the
+        trajectory to `n_frames` evenly-spaced snapshots. Each snapshot becomes
+        a MODEL in a single PDB file per molecule; 3dmol.js plays MODEL 1..N as
+        frames with a step slider.
+
+        Silent no-op on non-WandB loggers or if anything goes wrong.
+        """
+        logger = self.trainer.logger if self.trainer is not None else None
+        if logger is None or not hasattr(logger, "experiment"):
+            return
+        experiment = logger.experiment
+
+        try:
+            import tempfile
+            import wandb
+            if not hasattr(experiment, "log"):
+                return
+
+            use_charges = self.config.dataset.use_charges
+            atom_decoder = self.zatom_analyzer.dataset_info["atom_decoder"] \
+                if self.zatom_analyzer else ["H", "C", "N", "O", "F"]
+
+            # Generate a small batch with trajectories.
+            trajectories = self._sample_with_trajectory(n_molecules)
+            if not trajectories:
+                return
+
+            # For each molecule, emit a multi-MODEL PDB assembled from the
+            # selected trajectory frames.
+            wandb_mols = []
+            for traj in trajectories:
+                # Evenly-spaced frames across the full trajectory.
+                total = len(traj["frames"])
+                step_idxs = np.linspace(0, total - 1, num=min(n_frames, total)).round().astype(int)
+                pdb_lines = []
+                for model_num, t_idx in enumerate(step_idxs, start=1):
+                    x_frame, pos_frame = traj["frames"][t_idx]
+                    atom_types = x_frame[:, :5].argmax(dim=-1) if x_frame.shape[1] >= 5 else x_frame.argmax(dim=-1)
+                    pdb_lines.append(f"MODEL {model_num}")
+                    for i, (sym_idx, (xi, yi, zi)) in enumerate(zip(atom_types.tolist(), pos_frame.tolist()), start=1):
+                        sym = atom_decoder[int(sym_idx)]
+                        # Right-padded element to 2 chars for PDB column rules.
+                        pdb_lines.append(
+                            f"HETATM{i:>5d} {sym:<3s}  MOL     1    "
+                            f"{xi:>8.3f}{yi:>8.3f}{zi:>8.3f}  1.00  0.00          {sym:>2s}"
+                        )
+                    pdb_lines.append("ENDMDL")
+                pdb_lines.append("END")
+                pdb_text = "\n".join(pdb_lines) + "\n"
+
+                with tempfile.NamedTemporaryFile(mode="w", suffix=".pdb", delete=False) as fh:
+                    fh.write(pdb_text)
+                    wandb_mols.append(wandb.Molecule(fh.name))
+
+            experiment.log({
+                "samples/denoising_animation": wandb_mols,
+                "samples/denoising_animation_epoch": int(self.current_epoch),
+            })
+        except Exception as e:
+            print(f"[warn] wandb denoising-animation logging skipped: {e}")
+
+    def _sample_with_trajectory(self, num_molecules: int) -> list:
+        """Generate `num_molecules` samples and keep the full denoising trajectory
+        of each. Returns list of dicts: {"batch_mask", "frames"} where frames is
+        a list of (x, pos) snapshots across sampler steps (one per step+1)."""
+        if self.num_atoms_sampler is None:
+            return []
+        use_charges = self.config.dataset.use_charges
+        self.eval()
+        with torch.no_grad():
+            num_atoms = self.num_atoms_sampler(num_molecules).to(self.device)
+            batch_indices = torch.arange(len(num_atoms), device=self.device)
+            batch_idx = torch.repeat_interleave(batch_indices, num_atoms)
+            pos_0 = torch.randn([len(batch_idx), 3], device=self.device)
+            pos_0 = subtract_mean(pos_0, batch_idx)
+            x_0 = torch.randn(
+                [len(batch_idx), 5 + (1 if use_charges else 0)], device=self.device
+            )
+            out = edm_sampler(
+                self.model,
+                pos_0,
+                x_0,
+                batch_idx,
+                num_steps=self.config.diffusion.num_steps,
+                sigma_min=self.config.diffusion.sigma_min,
+                sigma_max=self.config.diffusion.sigma_max,
+                rho=self.config.diffusion.rho,
+                S_churn=self.config.diffusion.S_churn,
+                return_trajectory=True,
+            )
+            _x_final, _pos_final, trajectory = out
+
+        # Re-slice trajectory per-molecule.
+        batch_cpu = batch_idx.cpu()
+        trajectories = []
+        for g in range(int(batch_cpu.max()) + 1):
+            mask = (batch_cpu == g)
+            frames = []
+            for (x_step, pos_step) in trajectory:
+                frames.append((x_step[mask], pos_step[mask]))
+            trajectories.append({"batch_mask": mask, "frames": frames})
+        return trajectories
 
 
 # ---------------------------------------------------------------------------
