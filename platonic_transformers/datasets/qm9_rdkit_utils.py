@@ -187,8 +187,12 @@ def build_molecule(positions, atom_types, dataset_info):
     return mol
 
 
-def build_molecule_zatom_style(positions, atom_types, dataset_info):
-    """Zatom-1 bond inference: PDB round-trip with H removed.
+def build_molecule_zatom_style(positions, atom_types, dataset_info, remove_hs: bool = False):
+    """Zatom-1 bond inference: PDB round-trip.
+
+    Matches Zatom-1 protocol. `remove_hs` defaults to False to match
+    `configs/model/zatom.yaml` default in the Zatom-1 reference code.
+    (Hydrogens are retained through bond perception and PoseBusters.)
 
     See the module docstring for the deviation from the published pipeline
     (pymatgen PDB writer not available -> using RDKit MolToPDBBlock). Bond
@@ -212,8 +216,8 @@ def build_molecule_zatom_style(positions, atom_types, dataset_info):
         pdb_text = Chem.MolToPDBBlock(bare.GetMol())
         mol = Chem.MolFromPDBBlock(
             pdb_text,
-            removeHs=True,           # Zatom-1 protocol: strip hydrogens
-            proximityBonding=True,   # distance-based bond perception
+            removeHs=remove_hs,
+            proximityBonding=True,
         )
         return mol
     except Exception:
@@ -293,18 +297,27 @@ class ZatomMolecularMetrics(object):
         unique = list(set(valid_smiles))
         return unique, len(unique) / len(valid_smiles)
 
-    def compute_novelty(self, unique):
+    def compute_novelty(self, unique, n_valid: int):
+        """Zatom-1 definition: `|novel| / |valid|` (not `|novel| / |unique|`).
+
+        See zatom/eval/molecule_generation.py: `novel_rate = len(novel_smiles)
+        / len(valid_smiles)`. This differs from the EDM convention used in
+        BasicMolecularMetrics, which divides by `len(unique)`. Keep both
+        conventions intact so our `*_zatom` numbers are directly comparable
+        to Zatom-1's Table and our `*_edm` numbers are directly comparable
+        to Hoogeboom et al. 2022.
+        """
         if not self.dataset_smiles_set or not unique:
             return list(unique), 1.0
         novel = [s for s in unique if s not in self.dataset_smiles_set]
-        return novel, len(novel) / len(unique)
+        return novel, len(novel) / max(1, n_valid)
 
     def evaluate(self, generated):
         valid_smiles, valid_mols, validity = self.compute_validity(generated)
         if valid_smiles:
             unique, uniqueness = self.compute_uniqueness(valid_smiles)
             if self.dataset_smiles_set is not None:
-                _, novelty = self.compute_novelty(unique)
+                _, novelty = self.compute_novelty(unique, n_valid=len(valid_smiles))
             else:
                 novelty = 0.0
         else:
@@ -348,22 +361,6 @@ def compute_training_smiles_zatom(dataset, dataset_info, cache_path=None, show_p
     return smiles_set
 
 
-# PoseBusters checks reported in the Zatom-1 paper headline figure (their 7).
-# The full PoseBusters "mol" config returns 3 additional plumbing columns
-# (mol_pred_loaded, sanitization, inchi_convertible) which we record but do
-# not include in the headline "posebusters_pass" aggregate so our number
-# matches the paper's definition.
-POSEBUSTERS_PAPER_CHECKS = [
-    "all_atoms_connected",
-    "bond_lengths",
-    "bond_angles",
-    "internal_steric_clash",
-    "aromatic_ring_flatness",
-    "double_bond_flatness",
-    "internal_energy",
-]
-
-
 def run_posebusters(rdkit_mols, max_molecules: int = 1000, seed: int = 0):
     """Run PoseBusters (config='mol') on a list of sanitized RDKit mols.
 
@@ -372,19 +369,27 @@ def run_posebusters(rdkit_mols, max_molecules: int = 1000, seed: int = 0):
     optimization, which can take several seconds per molecule — running on
     the full 10k-molecule validation pool stalls training for an hour+ per
     validation. We therefore sub-sample to `max_molecules` molecules by
-    default. Validity / uniqueness / novelty / stability are still computed
-    over the full pool; only PoseBusters is sub-sampled.
+    default (Zatom-1 runs on the full pool; this is a speed trade-off we
+    accept for per-validation cost, documented in the module docstring).
+    Validity / uniqueness / novelty / stability are still computed over the
+    full pool.
 
-    Returns a dict:
-      posebusters_pass_rate    : fraction of sampled mols that pass ALL seven
-                                 headline checks (Zatom-1 definition).
-      posebusters/<check>_rate : per-check pass rate on the sampled subset.
-      posebusters/num_sampled  : number of molecules actually evaluated.
+    The headline `posebusters_pass_rate` is `df.all(axis=1).mean()` over
+    every column returned by PoseBusters, matching Zatom-1's
+    `pb_metrics_dict["posebusters_rate"] = pb_metrics.all(axis=1)` on
+    `zatom/eval/molecule_generation.py`. That includes the three plumbing
+    columns (`mol_pred_loaded`, `sanitization`, `inchi_convertible`) and
+    every substantive check (`all_atoms_connected`, `bond_lengths`,
+    `bond_angles`, `internal_steric_clash`, `aromatic_ring_flatness`,
+    `non-aromatic_ring_non-flatness` if available, `double_bond_flatness`,
+    `internal_energy`).
+
+    Per-column pass rates are logged as `posebusters/<column>_rate` for
+    every column PoseBusters returns, so downstream analysis can see the
+    plumbing and per-check breakdowns separately.
     If the list is empty, returns zeros so logging never blows up.
     """
-    metrics = {f"posebusters/{c}_rate": 0.0 for c in POSEBUSTERS_PAPER_CHECKS}
-    metrics["posebusters_pass_rate"] = 0.0
-    metrics["posebusters/num_sampled"] = 0
+    metrics = {"posebusters_pass_rate": 0.0, "posebusters/num_sampled": 0}
     if not rdkit_mols:
         return metrics
 
@@ -399,12 +404,14 @@ def run_posebusters(rdkit_mols, max_molecules: int = 1000, seed: int = 0):
 
     pb = PoseBusters(config="mol")
     df = pb.bust(mol_pred=rdkit_mols)
-    for c in POSEBUSTERS_PAPER_CHECKS:
-        if c in df.columns:
-            metrics[f"posebusters/{c}_rate"] = float(df[c].mean())
-    paper_cols = [c for c in POSEBUSTERS_PAPER_CHECKS if c in df.columns]
-    if paper_cols:
-        metrics["posebusters_pass_rate"] = float(df[paper_cols].all(axis=1).mean())
+    # Drop any metadata columns that aren't boolean check results (e.g. the
+    # molecule name column). PoseBusters uses a MultiIndex with the mol name
+    # as the first level; reset that so .mean() over the bool columns works.
+    check_cols = [c for c in df.columns if df[c].dtype == bool or df[c].dtype == "boolean"]
+    for c in check_cols:
+        metrics[f"posebusters/{c}_rate"] = float(df[c].mean())
+    if check_cols:
+        metrics["posebusters_pass_rate"] = float(df[check_cols].all(axis=1).mean())
     return metrics
 
 

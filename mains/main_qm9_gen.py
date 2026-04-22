@@ -541,7 +541,11 @@ def load_data(config: ml_collections.ConfigDict):
     #   * Zatom-1 : PDB-roundtrip bonds, removeHs=True, isomeric SMILES.
     # Both are cached on disk so this only runs once per dataset.
     edm_cache = os.path.join(config.dataset.data_dir, "train_smiles_edm.pkl")
-    zatom_cache = os.path.join(config.dataset.data_dir, "train_smiles_zatom.pkl")
+    # Zatom-1 default is removeHs=False so the training SMILES must retain H
+    # through the PDB round-trip pipeline for the novelty reference. We use a
+    # distinct cache filename from the earlier (removeHs=True) cache to avoid
+    # loading stale data.
+    zatom_cache = os.path.join(config.dataset.data_dir, "train_smiles_zatom_keep_hs.pkl")
     edm_smiles_list = compute_training_smiles(train_set, dataset_info, cache_path=edm_cache)
     zatom_smiles_list = compute_training_smiles_zatom(train_set, dataset_info, cache_path=zatom_cache)
 
