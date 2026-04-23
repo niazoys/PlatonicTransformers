@@ -15,16 +15,18 @@
 # Run from the login node.
 
 set -euo pipefail
-cd ~/platonic-transformers
+REPO=~/platonic-transformers
+cd "$REPO"
 
 submit () {
     local name="$1"
     local solid="$2"
     local extra="$3"
-    sbatch --job-name="$name" \
-           --output=logs/%x_%j.out \
-           --error=logs/%x_%j.err \
-           scripts/ivi/qm9_regr_slurm.sh "$solid" "$extra"
+    sbatch --chdir="$REPO" \
+           --job-name="$name" \
+           --output="$REPO/logs/%x_%j.out" \
+           --error="$REPO/logs/%x_%j.err" \
+           "$REPO/scripts/ivi/qm9_regr_slurm.sh" "$solid" "$extra"
 }
 
 # ---- trivial_3 (paper target: alpha 0.028) ----
