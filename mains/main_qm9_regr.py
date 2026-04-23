@@ -26,12 +26,17 @@ from platonic_transformers.utils.config_loader import (
     print_config
 )
 from platonic_transformers.utils.utils import CosineWarmupScheduler, RandomSOd
-from platonic_transformers.utils.callbacks import StopOnPersistentDivergence, TimerCallback
+from platonic_transformers.utils.callbacks import (
+    EMACallback,
+    StopOnPersistentDivergence,
+    TimerCallback,
+)
 
 # Performance optimizations
-torch.set_float32_matmul_precision('high')
 torch.backends.cuda.enable_flash_sdp(True)
 torch.backends.cuda.enable_mem_efficient_sdp(True)
+torch.backends.cudnn.benchmark = True
+torch._dynamo.config.cache_size_limit = 128  # variable atom count per batch
 
 
 class QM9Model(pl.LightningModule):
@@ -86,8 +91,12 @@ class QM9Model(pl.LightningModule):
             learned_freqs=config.model.learned_freqs,
             freq_init=config.model.freq_init,
             use_key=config.model.use_key,
+            rope_on_values=config.model.get("rope_on_values", False),
+            attention_backend=config.model.get("attention_backend", "scatter"),
         )
-        # self.net = torch.compile(self.net)
+
+        if config.model.get("compile", True):
+            self.net = torch.compile(self.net)
 
         # Initialize normalization parameters
         self.register_buffer('shift', torch.tensor(0.0, dtype=torch.float32))
@@ -312,6 +321,10 @@ def main(config: ml_collections.ConfigDict) -> None:
     print_config(config, "QM9 Training Configuration")
     pl.seed_everything(config.seed)
 
+    torch.set_float32_matmul_precision(
+        config.system.get("float32_matmul_precision", "high")
+    )
+
     train_loader, val_loader, test_loader = load_data(config)
 
     if config.system.gpus > 0 and torch.cuda.is_available():
@@ -350,6 +363,13 @@ def main(config: ml_collections.ConfigDict) -> None:
             patience=es_config.patience,
             grace_epochs=es_config.grace_epochs,
             verbose=False
+        ))
+
+    # Optional EMA (off by default for regression; controlled via config.training.ema_enabled).
+    if config.training.get("ema_enabled", False):
+        callbacks.append(EMACallback(
+            decay=config.training.get("ema_decay", 0.9999),
+            warmup_steps=config.training.get("ema_warmup_steps", 2000),
         ))
 
     trainer = pl.Trainer(

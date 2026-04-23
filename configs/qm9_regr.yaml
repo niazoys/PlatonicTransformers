@@ -6,7 +6,7 @@ seed: 42
 dataset:
   name: "qm9"
   data_dir: "./data/qm9"
-  target: "mu"  # Options: mu, alpha, homo, lumo, gap, r2, zpve, U0, U, H, G, Cv, U0_atom, U_atom, H_atom, G_atom, A, B, C
+  target: "alpha"  # Options: mu, alpha, homo, lumo, gap, r2, zpve, U0, U, H, G, Cv, U0_atom, U_atom, H_atom, G_atom, A, B, C
   num_splits: [110000, 10000, 10831]  # train, val, test
   use_k_hot_encoding: true  # Use k-hot embedding for atoms
 
@@ -39,6 +39,9 @@ model:
   learned_freqs: true
   freq_init: "spiral"  # Options: "random", "spiral"
   use_key: false
+  rope_on_values: true              # Public-repo GTA-style RoPE on values (new)
+  compile: true                     # torch.compile the backbone (mandatory for PlatoFormer)
+  attention_backend: "flash"        # "scatter" (fp32 fallback) | "flash" (faster)
 
 # Training configuration
 training:
@@ -46,6 +49,11 @@ training:
   batch_size: 96
   gradient_clip_val: 0.5
   train_augm: true  # Rotation augmentation
+  # Optional EMA (off by default for supervised regression; enable via CLI override
+  # to reproduce diffusion-style stability benefits).
+  ema_enabled: false
+  ema_decay: 0.9999
+  ema_warmup_steps: 2000
 
 # Optimizer configuration
 optimizer:
@@ -73,6 +81,7 @@ system:
   enable_progress_bar: true
   timer: null  # e.g., "00:08:00:00" for SLURM time limit
   precision: "32"  # Options: "16-mixed", "bf16-mixed", "32"
+  float32_matmul_precision: "high"  # "highest" (pure fp32), "high" (TF32), "medium" (bf16 operands)
 
 # Testing/checkpointing
 testing:
