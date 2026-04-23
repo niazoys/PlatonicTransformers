@@ -228,8 +228,12 @@ def edm_sampler(
 class QM9GenModel(pl.LightningModule):
     """Lightning module for equivariant diffusion generation on QM9."""
 
-    def __init__(self, config: ml_collections.ConfigDict):
+    def __init__(self, config):
         super().__init__()
+        # Lightning's load_from_checkpoint passes the saved hyper_parameters
+        # back as plain Python dicts; accept either a ConfigDict or dict.
+        if not isinstance(config, ml_collections.ConfigDict):
+            config = ml_collections.ConfigDict(config)
         self.save_hyperparameters({"config": config.to_dict()})
         self.config = config
 
@@ -350,10 +354,15 @@ class QM9GenModel(pl.LightningModule):
             self.log(key, value, on_step=False, on_epoch=True, prog_bar=False, logger=True)
 
     def on_test_epoch_end(self):
+        # Final test pass: match Zatom-1 Table 2 protocol — no sub-sampling
+        # anywhere, even for PoseBusters. Takes a bit longer (PoseBusters on
+        # ~9k valid mols) but gives apples-to-apples numbers for the paper
+        # table.
         results = self.run_validation_sampling(
             num_molecules=10000,
             batch_size=self.config.training.batch_size,
             rdkit_metrics=True,
+            posebusters_max_molecules=-1,
         )
         for key, value in results.items():
             self.log(f"final/{key}", value, on_step=False, on_epoch=True, prog_bar=False, logger=True)
@@ -425,7 +434,8 @@ class QM9GenModel(pl.LightningModule):
         return sample_list
 
     def run_validation_sampling(
-        self, num_molecules: int = 10000, batch_size: int = 100, rdkit_metrics: bool = True
+        self, num_molecules: int = 10000, batch_size: int = 100,
+        rdkit_metrics: bool = True, posebusters_max_molecules: int = 1000,
     ) -> dict:
         """Generate molecules and compute stability (always) + RDKit/PoseBusters
         metrics (only when rdkit_metrics=True).
@@ -480,7 +490,7 @@ class QM9GenModel(pl.LightningModule):
                 "uniqueness_zatom": z["uniqueness"],
                 "novelty_zatom": z["novelty"],
             })
-            results.update(run_posebusters(z["valid_mols"]))
+            results.update(run_posebusters(z["valid_mols"], max_molecules=posebusters_max_molecules))
 
             # Log a handful of sampled 3D molecules to wandb so we can watch
             # the qualitative output evolve. Each log entry is a PDB string
@@ -789,10 +799,15 @@ def main(config: ml_collections.ConfigDict) -> None:
         best_ckpt = callbacks[0].best_model_path or "last"
         trainer.test(model, val_loader, ckpt_path=best_ckpt)
     else:
-        model = QM9GenModel.load_from_checkpoint(test_ckpt)
+        # Test-only path. Instantiate the model from the current config, then
+        # let `trainer.test(ckpt_path=...)` handle full checkpoint restoration
+        # (model weights + callback states including EMA). This is the only
+        # API that properly triggers the EMA callback's load_state_dict hook;
+        # `LightningModule.load_from_checkpoint` restores weights alone.
+        model = QM9GenModel(config)
         model.set_num_atoms_sampler(num_atoms_sampler)
         model.init_molecule_analyzer(dataset_info, edm_smiles_list, zatom_smiles_list)
-        trainer.test(model, val_loader)
+        trainer.test(model, val_loader, ckpt_path=test_ckpt)
 
 
 if __name__ == "__main__":

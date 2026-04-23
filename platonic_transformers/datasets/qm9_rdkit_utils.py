@@ -374,6 +374,10 @@ def run_posebusters(rdkit_mols, max_molecules: int = 1000, seed: int = 0):
     Validity / uniqueness / novelty / stability are still computed over the
     full pool.
 
+    Pass `max_molecules=-1` (or any non-positive value) to disable the
+    subsample and run on every mol. Intended for the final test evaluation
+    where apples-to-apples paper-table numbers matter more than speed.
+
     The headline `posebusters_pass_rate` is `df.all(axis=1).mean()` over
     every column returned by PoseBusters, matching Zatom-1's
     `pb_metrics_dict["posebusters_rate"] = pb_metrics.all(axis=1)` on
@@ -394,7 +398,8 @@ def run_posebusters(rdkit_mols, max_molecules: int = 1000, seed: int = 0):
         return metrics
 
     # Sub-sample deterministically (seeded) when the pool is too large.
-    if len(rdkit_mols) > max_molecules:
+    # max_molecules<=0 means "no sub-sample" (use every mol).
+    if max_molecules > 0 and len(rdkit_mols) > max_molecules:
         rng = np.random.RandomState(seed)
         idx = rng.choice(len(rdkit_mols), size=max_molecules, replace=False)
         rdkit_mols = [rdkit_mols[i] for i in idx]
