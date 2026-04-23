@@ -37,6 +37,9 @@ torch.backends.cuda.enable_flash_sdp(True)
 torch.backends.cuda.enable_mem_efficient_sdp(True)
 torch.backends.cudnn.benchmark = True
 torch._dynamo.config.cache_size_limit = 128  # variable atom count per batch
+# Avoid "RuntimeError: received 0 items of ancdata" when num_workers > 0 on
+# clusters with low default FD limits.
+torch.multiprocessing.set_sharing_strategy("file_system")
 
 
 class QM9Model(pl.LightningModule):
