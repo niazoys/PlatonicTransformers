@@ -316,7 +316,7 @@ class QM9GenModel(pl.LightningModule):
             batch["pos"] = torch.einsum("ij,bj->bi", rot, batch["pos"])
         loss, _ = self.criterion(self.model, batch)
         self.log(
-            "loss/train",
+            "train/loss",
             loss,
             on_step=True,
             on_epoch=True,
@@ -329,7 +329,7 @@ class QM9GenModel(pl.LightningModule):
     def validation_step(self, batch, batch_idx):
         loss, _ = self.criterion(self.model, batch)
         self.log(
-            "loss/val",
+            "val/loss",
             loss,
             on_step=False,
             on_epoch=True,
@@ -355,7 +355,7 @@ class QM9GenModel(pl.LightningModule):
             posebusters_max_molecules=1000,
         )
         for key, value in results.items():
-            self.log(key, value, on_step=False, on_epoch=True, prog_bar=False, logger=True)
+            self.log(f"val/{key}", value, on_step=False, on_epoch=True, prog_bar=False, logger=True)
 
     def on_test_epoch_end(self):
         # Final test pass: match Zatom-1 Table 2 protocol — no sub-sampling
@@ -448,7 +448,7 @@ class QM9GenModel(pl.LightningModule):
         two parallel protocols in the same pass:
           - `*_edm`   : EDM (Hoogeboom et al. 2022) distance-table bonds with H.
           - `*_zatom` : Zatom-1 (arXiv:2602.22251) PDB-roundtrip bonds, no H.
-        plus `posebusters_pass_rate` and per-check PoseBusters pass rates
+        plus `posebusters/pass_rate` and per-check PoseBusters pass rates
         reported by the Zatom-1 paper (run on the sanitized Zatom-style mols).
         """
         if rdkit_metrics and (self.edm_analyzer is None or self.zatom_analyzer is None):
@@ -482,17 +482,17 @@ class QM9GenModel(pl.LightningModule):
             # EDM-flavor validity/uniqueness/novelty
             [v_e, u_e, n_e], _ = self.edm_analyzer.evaluate(molecules)
             results.update({
-                "validity/edm": v_e,
-                "uniqueness/edm": u_e,
-                "novelty/edm": n_e,
+                "rdkit_edm/validity": v_e,
+                "rdkit_edm/uniqueness": u_e,
+                "rdkit_edm/novelty": n_e,
             })
 
             # Zatom-1-flavor validity/uniqueness/novelty + PoseBusters
             z = self.zatom_analyzer.evaluate(molecules)
             results.update({
-                "validity/zatom": z["validity"],
-                "uniqueness/zatom": z["uniqueness"],
-                "novelty/zatom": z["novelty"],
+                "rdkit_zatom/validity": z["validity"],
+                "rdkit_zatom/uniqueness": z["uniqueness"],
+                "rdkit_zatom/novelty": z["novelty"],
             })
             results.update(run_posebusters(z["valid_mols"], max_molecules=posebusters_max_molecules))
 
@@ -757,7 +757,7 @@ def main(config: ml_collections.ConfigDict) -> None:
 
     callbacks = [
         pl.callbacks.ModelCheckpoint(
-            monitor="stability/molecule",
+            monitor="val/stability/molecule",
             mode="max",
             every_n_epochs=config.training.validation_frequency,
             save_last=True,
