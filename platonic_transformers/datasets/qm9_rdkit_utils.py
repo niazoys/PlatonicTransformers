@@ -409,14 +409,34 @@ def run_posebusters(rdkit_mols, max_molecules: int = 1000, seed: int = 0):
 
     pb = PoseBusters(config="mol")
     df = pb.bust(mol_pred=rdkit_mols)
-    # Drop any metadata columns that aren't boolean check results (e.g. the
-    # molecule name column). PoseBusters uses a MultiIndex with the mol name
-    # as the first level; reset that so .mean() over the bool columns works.
-    check_cols = [c for c in df.columns if df[c].dtype == bool or df[c].dtype == "boolean"]
+    # Each PoseBusters check returns either a bool or a numeric "score" where
+    # the boolean pass/fail flag is stored alongside. For checks whose kernel
+    # errored on some molecules (most commonly `internal_energy` — its ETKDG
+    # conformer generator sometimes can't re-embed our structures) pandas
+    # silently promotes the column to object dtype containing {True, False,
+    # NaN}. Picking only `dtype == bool` therefore drops exactly those rows
+    # from the report. Keep any column whose non-NaN values are a subset of
+    # {True, False}.
+    def _is_pass_fail_column(series) -> bool:
+        if series.dtype == bool or series.dtype.name == "boolean":
+            return True
+        vals = series.dropna().unique()
+        return len(vals) > 0 and set(vals).issubset({True, False})
+
+    check_cols = [c for c in df.columns if _is_pass_fail_column(df[c])]
     for c in check_cols:
-        metrics[f"posebusters/{c}_rate"] = float(df[c].mean())
+        # .mean() on a boolean series ignores NaN by default via skipna; cast
+        # the boolean-with-NaN "object" columns to float to get the same.
+        col = df[c]
+        if col.dtype != bool and col.dtype.name != "boolean":
+            col = col.astype("boolean").astype("float")
+        metrics[f"posebusters/{c}_rate"] = float(col.mean())
     if check_cols:
-        metrics["posebusters_pass_rate"] = float(df[check_cols].all(axis=1).mean())
+        # Aggregate pass rate: every check must pass. NaNs are treated as fail
+        # (we don't know if they'd pass or not — conservative choice) to avoid
+        # inflating the headline.
+        passes = df[check_cols].fillna(False)
+        metrics["posebusters_pass_rate"] = float(passes.all(axis=1).mean())
     return metrics
 
 
