@@ -106,6 +106,6 @@ testing:
 
 # Checkpoint configuration
 checkpoint:
-  monitor: "molecule_stability"
+  monitor: "stability/molecule"
   mode: "max"
   save_last: true

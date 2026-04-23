@@ -393,7 +393,7 @@ def run_posebusters(rdkit_mols, max_molecules: int = 1000, seed: int = 0):
     plumbing and per-check breakdowns separately.
     If the list is empty, returns zeros so logging never blows up.
     """
-    metrics = {"posebusters_pass_rate": 0.0, "posebusters/num_sampled": 0}
+    metrics = {"posebusters/pass_rate": 0.0, "posebusters/num_sampled": 0}
     if not rdkit_mols:
         return metrics
 
@@ -436,7 +436,7 @@ def run_posebusters(rdkit_mols, max_molecules: int = 1000, seed: int = 0):
         # (we don't know if they'd pass or not — conservative choice) to avoid
         # inflating the headline.
         passes = df[check_cols].fillna(False)
-        metrics["posebusters_pass_rate"] = float(passes.all(axis=1).mean())
+        metrics["posebusters/pass_rate"] = float(passes.all(axis=1).mean())
     return metrics
 
 

@@ -316,7 +316,7 @@ class QM9GenModel(pl.LightningModule):
             batch["pos"] = torch.einsum("ij,bj->bi", rot, batch["pos"])
         loss, _ = self.criterion(self.model, batch)
         self.log(
-            "train_loss",
+            "loss/train",
             loss,
             on_step=True,
             on_epoch=True,
@@ -329,7 +329,7 @@ class QM9GenModel(pl.LightningModule):
     def validation_step(self, batch, batch_idx):
         loss, _ = self.criterion(self.model, batch)
         self.log(
-            "val_loss",
+            "loss/val",
             loss,
             on_step=False,
             on_epoch=True,
@@ -340,16 +340,20 @@ class QM9GenModel(pl.LightningModule):
         return loss
 
     def on_validation_epoch_end(self):
+        # Only run the expensive sample-and-evaluate pass on "full" validation
+        # epochs (every validation_frequency epochs). The per-epoch val loss is
+        # already tracked by validation_step.
         freq = self.config.training.validation_frequency
         full_validation = (self.current_epoch + 1) % freq == 0
+        if not full_validation:
+            return
 
         results = self.run_validation_sampling(
-            num_molecules=10000 if full_validation else self.config.training.batch_size,
+            num_molecules=10000,
             batch_size=self.config.training.batch_size,
-            rdkit_metrics=full_validation,
+            rdkit_metrics=True,
+            posebusters_max_molecules=1000,
         )
-        if not full_validation:
-            results = {f"{k} (estimate)": v for k, v in results.items()}
         for key, value in results.items():
             self.log(key, value, on_step=False, on_epoch=True, prog_bar=False, logger=True)
 
@@ -365,7 +369,7 @@ class QM9GenModel(pl.LightningModule):
             posebusters_max_molecules=-1,
         )
         for key, value in results.items():
-            self.log(f"final/{key}", value, on_step=False, on_epoch=True, prog_bar=False, logger=True)
+            self.log(f"test/{key}", value, on_step=False, on_epoch=True, prog_bar=False, logger=True)
 
     def test_step(self, batch, batch_idx):
         return None
@@ -469,26 +473,26 @@ class QM9GenModel(pl.LightningModule):
             count_mol_total += 1
 
         results = {
-            "atom_stability": 100.0 * count_atm_stable / max(1, count_atm_total),
-            "molecule_stability": 100.0 * count_mol_stable / max(1, count_mol_total),
-            "avg_time_per_molecule": avg_time_per_molecule,
+            "stability/atom": 100.0 * count_atm_stable / max(1, count_atm_total),
+            "stability/molecule": 100.0 * count_mol_stable / max(1, count_mol_total),
+            "timing/avg_per_molecule": avg_time_per_molecule,
         }
 
         if rdkit_metrics:
             # EDM-flavor validity/uniqueness/novelty
             [v_e, u_e, n_e], _ = self.edm_analyzer.evaluate(molecules)
             results.update({
-                "validity_edm": v_e,
-                "uniqueness_edm": u_e,
-                "novelty_edm": n_e,
+                "validity/edm": v_e,
+                "uniqueness/edm": u_e,
+                "novelty/edm": n_e,
             })
 
             # Zatom-1-flavor validity/uniqueness/novelty + PoseBusters
             z = self.zatom_analyzer.evaluate(molecules)
             results.update({
-                "validity_zatom": z["validity"],
-                "uniqueness_zatom": z["uniqueness"],
-                "novelty_zatom": z["novelty"],
+                "validity/zatom": z["validity"],
+                "uniqueness/zatom": z["uniqueness"],
+                "novelty/zatom": z["novelty"],
             })
             results.update(run_posebusters(z["valid_mols"], max_molecules=posebusters_max_molecules))
 
@@ -753,7 +757,7 @@ def main(config: ml_collections.ConfigDict) -> None:
 
     callbacks = [
         pl.callbacks.ModelCheckpoint(
-            monitor="molecule_stability",
+            monitor="stability/molecule",
             mode="max",
             every_n_epochs=config.training.validation_frequency,
             save_last=True,
@@ -796,8 +800,11 @@ def main(config: ml_collections.ConfigDict) -> None:
         model.set_num_atoms_sampler(num_atoms_sampler)
         model.init_molecule_analyzer(dataset_info, edm_smiles_list, zatom_smiles_list)
         trainer.fit(model, train_loader, val_loader, ckpt_path=config.testing.resume_ckpt)
-        best_ckpt = callbacks[0].best_model_path or "last"
-        trainer.test(model, val_loader, ckpt_path=best_ckpt)
+        # Use the LAST checkpoint, not best — with EMA, the last-epoch EMA
+        # weights are a tighter estimate of the model's asymptotic quality
+        # than picking whichever checkpoint happened to score highest on its
+        # single 10k-molecule eval (which is dominated by stochastic noise).
+        trainer.test(model, val_loader, ckpt_path="last")
     else:
         # Test-only path. Instantiate the model from the current config, then
         # let `trainer.test(ckpt_path=...)` handle full checkpoint restoration

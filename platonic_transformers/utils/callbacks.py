@@ -37,14 +37,14 @@ class TimerCallback(pl.Callback):
 
     def on_train_end(self, trainer: pl.Trainer, pl_module: pl.LightningModule) -> None:
         total_training_time = (time.time() - self.total_training_start_time) / 60
-        self._log_metric(trainer, "Total Training Time (min)", total_training_time)
+        self._log_metric(trainer, "timing/total_training_min", total_training_time)
 
     def on_test_epoch_start(self, trainer: pl.Trainer, pl_module: pl.LightningModule) -> None:
         self.epoch_start_time = time.time()
 
     def on_test_epoch_end(self, trainer: pl.Trainer, pl_module: pl.LightningModule) -> None:
         self.test_inference_time = (time.time() - self.epoch_start_time) / 60
-        self._log_metric(trainer, "Test Inference Time (min)", self.test_inference_time)
+        self._log_metric(trainer, "timing/test_inference_min", self.test_inference_time)
 
 
 class EMACallback(pl.Callback):
