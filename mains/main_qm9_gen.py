@@ -1,7 +1,6 @@
 import os
 import sys
 import time
-from typing import Tuple
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if REPO_ROOT not in sys.path:
@@ -26,6 +25,7 @@ from platonic_transformers.datasets.qm9_rdkit_utils import (
     compute_training_smiles_zatom,
     run_posebusters,
 )
+from platonic_transformers.diffusion import EDMLoss, EDMPrecond, edm_sampler
 from platonic_transformers.models.platoformer.groups import PLATONIC_GROUPS
 from platonic_transformers.models.platoformer.platoformer import PlatonicTransformer
 from platonic_transformers.utils.callbacks import EMACallback, TimerCallback
@@ -34,7 +34,7 @@ from platonic_transformers.utils.config_loader import (
     load_with_defaults,
     print_config,
 )
-from platonic_transformers.utils.utils import RandomSOd, fully_connected_edge_index, subtract_mean
+from platonic_transformers.utils.utils import RandomSOd, subtract_mean
 
 # Performance backends (mirrors our OMol training setup).
 # Keep weights/activations in fp32 (diffusion loss weighting is sigma-sensitive and
@@ -45,179 +45,6 @@ torch.backends.cuda.enable_flash_sdp(True)
 torch.backends.cuda.enable_mem_efficient_sdp(True)
 torch.backends.cudnn.benchmark = True
 torch._dynamo.config.cache_size_limit = 128  # variable atom count per batch
-
-
-# ---------------------------------------------------------------------------
-# EDM preconditioning, loss, sampler (Karras et al., 2022)
-# ---------------------------------------------------------------------------
-
-
-class EDMPrecond(torch.nn.Module):
-    """Karras-style preconditioning wrapper for an equivariant denoiser."""
-
-    def __init__(
-        self,
-        model: torch.nn.Module,
-        sigma_min: float = 0.0,
-        sigma_max: float = float("inf"),
-        sigma_data: float = 1.0,
-        avg_num_nodes: float = 18.0,
-    ):
-        super().__init__()
-        self.model = model
-        self.sigma_min = sigma_min
-        self.sigma_max = sigma_max
-        self.sigma_data = sigma_data
-        self.avg_num_nodes = avg_num_nodes
-
-    def forward(self, x, pos, batch, sigma):
-        # sigma may be per-node (shape [N] or [N,1], e.g. from EDMLoss) or per-graph
-        # (shape [B] or [B,1], e.g. from the sampler). Normalize to a per-graph vector.
-        sigma = sigma.reshape(-1, 1)
-        num_graphs = int(batch.max().item()) + 1
-        if sigma.shape[0] == batch.shape[0]:
-            # Per-node form — reduce to per-graph (values are identical within a graph).
-            sigma_per_graph = torch.unique_consecutive(sigma.squeeze(-1)).reshape(-1, 1)
-        elif sigma.numel() == 1:
-            sigma_per_graph = sigma.expand(num_graphs, 1)
-        else:
-            sigma_per_graph = sigma
-        sigma_per_node = sigma_per_graph[batch]  # (N, 1)
-
-        c_skip = self.sigma_data ** 2 / (sigma_per_node ** 2 + self.sigma_data ** 2)
-        c_out = sigma_per_node * self.sigma_data / (sigma_per_node ** 2 + self.sigma_data ** 2).sqrt()
-        c_in = 1 / (self.sigma_data ** 2 + sigma_per_node ** 2).sqrt()
-        c_noise = sigma_per_graph.log() / 4  # (B, 1)
-
-        x_in = c_in * x
-        pos_in = c_in * pos
-
-        # Also feed noise as a per-node scalar input feature (matches cleaned-dev).
-        scalars_in = torch.cat([x_in, c_noise[batch]], dim=-1)
-
-        scalars_out, vecs_out = self.model(
-            scalars_in, pos_in, batch, vec=None,
-            t=c_noise.squeeze(-1), avg_num_nodes=self.avg_num_nodes,
-        )
-        dx = scalars_out
-        dpos = vecs_out.squeeze(1)
-
-        F_x = x_in - dx
-        F_pos = pos_in - dpos
-        D_x = c_skip * x + c_out * F_x.to(torch.float32)
-        D_pos = c_skip * pos + c_out * F_pos.to(torch.float32)
-        return D_x, D_pos
-
-
-class EDMLoss:
-    """Karras-style log-normal noise + weighted MSE on atom features and positions."""
-
-    def __init__(
-        self,
-        P_mean: float = -1.2,
-        P_std: float = 1.2,
-        sigma_data: float = 1.0,
-        normalize_x_factor: float = 4.0,
-        normalize_charge_factor: float = 8.0,
-        use_charges: bool = True,
-    ):
-        self.P_mean = P_mean
-        self.P_std = P_std
-        self.sigma_data = sigma_data
-        self.normalize_x_factor = normalize_x_factor
-        self.normalize_charge_factor = normalize_charge_factor
-        self.use_charges = use_charges
-
-    def __call__(self, net: EDMPrecond, inputs: dict):
-        pos, x, batch = inputs["pos"], inputs["x"], inputs["batch"]
-        pos = subtract_mean(pos, batch)
-
-        if self.use_charges:
-            x = x.clone()
-            x[:, :-1] = x[:, :-1] / self.normalize_x_factor
-            x[:, -1] = x[:, -1] / self.normalize_charge_factor
-        else:
-            x = x / self.normalize_x_factor
-
-        rnd_normal = torch.randn(
-            [batch.max() + 1, 1], device=pos.device, dtype=torch.float32
-        )
-        rnd_normal = rnd_normal[batch]
-        sigma = (rnd_normal * self.P_std + self.P_mean).exp()
-        weight = (sigma ** 2 + self.sigma_data ** 2) / (sigma * self.sigma_data) ** 2
-
-        x_noisy = x + torch.randn_like(x) * sigma
-        pos_noisy = pos + subtract_mean(torch.randn_like(pos), batch) * sigma
-
-        D_x, D_pos = net(x_noisy, pos_noisy, batch, sigma)
-        error_x = (D_x - x) ** 2
-        error_pos = (D_pos - pos) ** 2
-        loss = (weight * error_x).mean() + (weight * error_pos).mean()
-        return loss, (D_x, D_pos)
-
-
-def edm_sampler(
-    net: EDMPrecond,
-    pos_0: torch.Tensor,
-    x_0: torch.Tensor,
-    batch: torch.Tensor,
-    num_steps: int = 50,
-    sigma_min: float = 0.002,
-    sigma_max: float = 80.0,
-    rho: float = 7.0,
-    S_churn: float = 20.0,
-    S_min: float = 0.0,
-    S_max: float = float("inf"),
-    S_noise: float = 1.0,
-    return_trajectory: bool = False,
-):
-    """Karras Euler-Maruyama sampler with second-order correction.
-
-    If return_trajectory=True, additionally returns a list of
-    (x, pos) snapshots at each sampler step (on CPU) for visualization.
-    """
-    sigma_min = max(sigma_min, net.sigma_min)
-    sigma_max = min(sigma_max, net.sigma_max)
-    num_graphs = int(batch.max().item()) + 1
-
-    step_indices = torch.arange(num_steps, dtype=torch.float32, device=pos_0.device)
-    t_steps = (
-        sigma_max ** (1 / rho)
-        + step_indices / (num_steps - 1) * (sigma_min ** (1 / rho) - sigma_max ** (1 / rho))
-    ) ** rho
-    t_steps = torch.cat([t_steps, torch.zeros_like(t_steps[:1])])
-
-    x_next, pos_next = x_0 * t_steps[0], pos_0 * t_steps[0]
-    trajectory = [(x_next.detach().cpu(), pos_next.detach().cpu())] if return_trajectory else None
-
-    for i, (t_cur, t_next) in enumerate(zip(t_steps[:-1], t_steps[1:])):
-        x_cur, pos_cur = x_next, pos_next
-
-        gamma = min(S_churn / num_steps, np.sqrt(2) - 1) if S_min <= t_cur <= S_max else 0
-        t_hat = t_cur + gamma * t_cur
-        x_hat = x_cur + (t_hat ** 2 - t_cur ** 2).sqrt() * S_noise * torch.randn_like(x_cur)
-        pos_hat = pos_cur + (t_hat ** 2 - t_cur ** 2).sqrt() * S_noise * torch.randn_like(pos_cur)
-
-        x_denoised, pos_denoised = net(x_hat, pos_hat, batch, t_hat.expand(num_graphs))
-        dx_cur = (x_hat - x_denoised) / t_hat
-        dpos_cur = (pos_hat - pos_denoised) / t_hat
-        x_next = x_hat + (t_next - t_hat) * dx_cur
-        pos_next = pos_hat + (t_next - t_hat) * dpos_cur
-
-        if i < num_steps - 1:
-            x_denoised, pos_denoised = net(x_next, pos_next, batch, t_next.expand(num_graphs))
-            dx_prime = (x_next - x_denoised) / t_next
-            dpos_prime = (pos_next - pos_denoised) / t_next
-            x_next = x_hat + (t_next - t_hat) * (0.5 * dx_cur + 0.5 * dx_prime)
-            pos_next = pos_hat + (t_next - t_hat) * (0.5 * dpos_cur + 0.5 * dpos_prime)
-
-        if return_trajectory:
-            trajectory.append((x_next.detach().cpu(), pos_next.detach().cpu()))
-
-    pos_next = subtract_mean(pos_next, batch)
-    if return_trajectory:
-        return x_next, pos_next, trajectory
-    return x_next, pos_next
 
 
 # ---------------------------------------------------------------------------
