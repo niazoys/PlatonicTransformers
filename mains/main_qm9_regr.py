@@ -297,10 +297,16 @@ def load_data(config: ml_collections.ConfigDict) -> Tuple[DataLoader, DataLoader
     # Set the target for the entire dataset *before* splitting
     dataset.data.y = dataset.data.y[:, target_idx]
 
-    # Create train/val/test split (same as DimeNet)
+    # Create train/val/test split (same as DimeNet). The QM9 SDF nominally has
+    # 130831 entries but PyG's process step drops rows that RDKit can't parse,
+    # so use the actual processed length to avoid an out-of-range permutation.
+    n_total = len(dataset)
+    n_train, n_val, _ = config.dataset.num_splits
     random_state = np.random.RandomState(seed=42)
-    perm = torch.from_numpy(random_state.permutation(np.arange(130831)))
-    train_idx, val_idx, test_idx = perm[:110000], perm[110000:120000], perm[120000:]
+    perm = torch.from_numpy(random_state.permutation(np.arange(n_total)))
+    train_idx = perm[:n_train]
+    val_idx = perm[n_train:n_train + n_val]
+    test_idx = perm[n_train + n_val:]
     datasets = {'train': dataset[train_idx], 'val': dataset[val_idx], 'test': dataset[test_idx]}
     
     # Create dataloaders
