@@ -45,7 +45,13 @@ from platonic_transformers.utils.utils import RandomSOd, subtract_mean
 torch.backends.cuda.enable_flash_sdp(True)
 torch.backends.cuda.enable_mem_efficient_sdp(True)
 torch.backends.cudnn.benchmark = True
-torch._dynamo.config.cache_size_limit = 128  # variable atom count per batch
+torch._dynamo.config.cache_size_limit = 128  # per-code cache; variable atom count per batch
+torch._dynamo.config.accumulated_cache_size_limit = 2048  # global cache ceiling
+# Without this bump we hit the 256 default within the first epoch (QM9 atom
+# counts are 1..29 and every unique total-N triggers a fresh compile across
+# all code paths: transformer block, RMSNorm, AdaLN, readouts, precond).
+# Beyond the cap, dynamo disables caching and recompiles every batch, which
+# silently makes startup take 15+ minutes instead of 2-3.
 
 
 # ---------------------------------------------------------------------------
