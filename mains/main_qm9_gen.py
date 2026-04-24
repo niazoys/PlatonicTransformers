@@ -204,6 +204,12 @@ class QM9GenModel(pl.LightningModule):
         )
         self.log("train/loss_ema", self._loss_ema, on_step=True, on_epoch=False,
                  logger=True, batch_size=batch_size)
+        # Per-step diagnostics from EDMLoss (debug: answers "when a batch has
+        # loss X, which of {sigma extreme, model output large, error large}
+        # was the proximate cause?").
+        for k, v in self.criterion.last_stats.items():
+            self.log(f"train_dbg/{k}", v, on_step=True, on_epoch=False,
+                     logger=True, batch_size=batch_size)
         return loss
 
     def validation_step(self, batch, batch_idx):
