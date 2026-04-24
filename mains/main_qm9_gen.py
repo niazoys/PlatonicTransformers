@@ -102,9 +102,6 @@ class QM9GenModel(pl.LightningModule):
             use_key=config.model.use_key,
             rope_on_values=config.model.rope_on_values,
             attention_backend=config.model.get("attention_backend", "scatter"),
-            qk_norm=config.model.get("qk_norm", False),
-            zero_init_readout=config.model.get("zero_init_readout", True),
-            time_conditioning=True,
         )
 
         if getattr(config.model, "compile", True):
@@ -130,13 +127,6 @@ class QM9GenModel(pl.LightningModule):
         self.edm_analyzer = None
         self.zatom_analyzer = None
 
-        # Running EMA of recent training loss for spike detection (see
-        # training_step). Computed outside the graph; only used to decide
-        # whether to skip an optimizer step on a statistically anomalous
-        # batch.
-        self._loss_ema: Optional[float] = None
-        self._skip_counter: int = 0
-
     def set_num_atoms_sampler(self, num_atoms_sampler):
         self.num_atoms_sampler = num_atoms_sampler
 
@@ -155,44 +145,10 @@ class QM9GenModel(pl.LightningModule):
         loss, _ = self.criterion(self.model, batch)
         batch_size = batch["batch"].max() + 1
 
-        # Spike / NaN guard. Zero-init and QK-norm together reduce the
-        # frequency of training-loss spikes but don't fully eliminate them —
-        # we've observed multi-batch ramps to 1e6+ loss values even with
-        # the clean architectural stack. Skip optimizer.step() on NaN/Inf
-        # OR on batches that exceed ``loss_spike_threshold * running_ema``.
-        # Empirically normal batch variance stays < 6x median; real spikes
-        # are 100-1e6x, so threshold=10x cleanly separates them. Running
-        # EMA is only updated on accepted batches, so a skipped spike
-        # doesn't pollute the reference.
-        spike_thr = self.config.training.get("loss_spike_threshold", 10.0)
-        ema_beta = self.config.training.get("loss_ema_decay", 0.99)
-        warmup_steps = self.config.training.get("loss_spike_warmup_steps", 200)
-        loss_val = loss.detach().item()
-
-        skip = False
-        if not np.isfinite(loss_val):
-            skip = True
-        elif (
-            spike_thr > 0
-            and self._loss_ema is not None
-            and self.global_step >= warmup_steps
-            and loss_val > spike_thr * self._loss_ema
-        ):
-            skip = True
-
-        if skip:
-            self._skip_counter += 1
-            self.log("train/skipped_batches", float(self._skip_counter),
-                     on_step=True, on_epoch=False, logger=True, batch_size=batch_size)
-            self.log("train/skipped_loss_val", loss_val,
-                     on_step=True, on_epoch=False, logger=True, batch_size=batch_size)
+        # NaN/Inf guard: skip optimizer.step() so NaNs don't propagate through
+        # AdamW state. No ratio-based skip — keep training loops simple.
+        if not torch.isfinite(loss):
             return None
-
-        # Update EMA only on accepted batches.
-        if self._loss_ema is None:
-            self._loss_ema = loss_val
-        else:
-            self._loss_ema = ema_beta * self._loss_ema + (1.0 - ema_beta) * loss_val
 
         self.log(
             "train/loss",
@@ -203,8 +159,6 @@ class QM9GenModel(pl.LightningModule):
             logger=True,
             batch_size=batch_size,
         )
-        self.log("train/loss_ema", self._loss_ema, on_step=True, on_epoch=False,
-                 logger=True, batch_size=batch_size)
         return loss
 
     def validation_step(self, batch, batch_idx):
@@ -235,8 +189,7 @@ class QM9GenModel(pl.LightningModule):
             rdkit_metrics=True,
             posebusters_max_molecules=1000,
         )
-        for key, value in results.items():
-            self.log(f"val/{key}", value, on_step=False, on_epoch=True, prog_bar=False, logger=True)
+        self._log_sampling_results(results, phase="val")
 
     def on_test_epoch_end(self):
         # Final test pass: match Zatom-1 Table 2 protocol — no sub-sampling
@@ -249,8 +202,23 @@ class QM9GenModel(pl.LightningModule):
             rdkit_metrics=True,
             posebusters_max_molecules=-1,
         )
+        self._log_sampling_results(results, phase="test")
+
+    def _log_sampling_results(self, results: dict, phase: str) -> None:
+        """Log sampling metrics to wandb under the ``{phase}_edm/*`` and
+        ``{phase}_zatom/*`` sections.
+
+        WandB only groups by the first "/" in the metric name, so we
+        fold the EDM vs Zatom-1 protocol distinction into the section
+        suffix and keep a flat metric name after the slash. EDM section
+        covers stability (always computed) + Hoogeboom-style RDKit
+        validity/uniqueness/novelty. Zatom section covers the
+        pymatgen→RDKit RDKit protocol + PoseBusters. Timing is logged
+        once at the top of each phase.
+        """
         for key, value in results.items():
-            self.log(f"test/{key}", value, on_step=False, on_epoch=True, prog_bar=False, logger=True)
+            self.log(f"{phase}_{key}", value, on_step=False, on_epoch=True,
+                     prog_bar=False, logger=True)
 
     def test_step(self, batch, batch_idx):
         return None
@@ -353,9 +321,12 @@ class QM9GenModel(pl.LightningModule):
             count_mol_stable += int(is_stable)
             count_mol_total += 1
 
+        # Keys are grouped so wandb's "/" sectioning picks up ``_edm`` vs
+        # ``_zatom`` as distinct panels. EDM section: stability (always) +
+        # Hoogeboom RDKit. Zatom section: Zatom-1 RDKit + PoseBusters.
         results = {
-            "stability/atom": 100.0 * count_atm_stable / max(1, count_atm_total),
-            "stability/molecule": 100.0 * count_mol_stable / max(1, count_mol_total),
+            "edm/atom_stability": 100.0 * count_atm_stable / max(1, count_atm_total),
+            "edm/molecule_stability": 100.0 * count_mol_stable / max(1, count_mol_total),
             "timing/avg_per_molecule": avg_time_per_molecule,
         }
 
@@ -363,19 +334,24 @@ class QM9GenModel(pl.LightningModule):
             # EDM-flavor validity/uniqueness/novelty
             [v_e, u_e, n_e], _ = self.edm_analyzer.evaluate(molecules)
             results.update({
-                "rdkit_edm/validity": v_e,
-                "rdkit_edm/uniqueness": u_e,
-                "rdkit_edm/novelty": n_e,
+                "edm/validity": v_e,
+                "edm/uniqueness": u_e,
+                "edm/novelty": n_e,
             })
 
             # Zatom-1-flavor validity/uniqueness/novelty + PoseBusters
             z = self.zatom_analyzer.evaluate(molecules)
             results.update({
-                "rdkit_zatom/validity": z["validity"],
-                "rdkit_zatom/uniqueness": z["uniqueness"],
-                "rdkit_zatom/novelty": z["novelty"],
+                "zatom/validity": z["validity"],
+                "zatom/uniqueness": z["uniqueness"],
+                "zatom/novelty": z["novelty"],
             })
-            results.update(run_posebusters(z["valid_mols"], max_molecules=posebusters_max_molecules))
+            pb = run_posebusters(z["valid_mols"], max_molecules=posebusters_max_molecules)
+            # Re-key PoseBusters metrics into the Zatom section with a
+            # ``posebusters_`` prefix so they share the same wandb panel.
+            for k, v in pb.items():
+                _, _, tail = k.partition("/")
+                results[f"zatom/posebusters_{tail or k}"] = v
 
             # Log a handful of sampled 3D molecules to wandb so we can watch
             # the qualitative output evolve. Each log entry is a PDB string
@@ -631,14 +607,17 @@ def main(config: ml_collections.ConfigDict) -> None:
     if config.logging.enabled:
         save_dir = os.path.join(os.path.dirname(os.path.realpath(__file__)), "logs")
         logger = pl.loggers.WandbLogger(
-            project=config.logging.project_name, config=config.to_dict(), save_dir=save_dir
+            project=config.logging.project_name,
+            entity=config.logging.get("wandb_identity", None),
+            config=config.to_dict(),
+            save_dir=save_dir,
         )
     else:
         logger = None
 
     callbacks = [
         pl.callbacks.ModelCheckpoint(
-            monitor="val/stability/molecule",
+            monitor="val_edm/molecule_stability",
             mode="max",
             every_n_epochs=config.training.validation_frequency,
             save_last=True,

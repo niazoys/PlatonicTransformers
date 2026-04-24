@@ -113,27 +113,20 @@ def test_flash_equivariance(solid_name):
         scalar_task_level="node", vector_task_level="node",
         attention=True, rope_sigma=2.0, freq_init="random",
         rope_on_values=True, attention_backend="flash",
-        time_conditioning=True,
     ).cuda().eval()
 
-    # Nudge weights off zero-init so the modulation actually fires.
-    for p in model.parameters():
-        if p.requires_grad:
-            p.data.add_(torch.randn_like(p) * 0.02)
-
-    N, B = 12, 2
+    N = 12
     x = torch.randn(N, 5, device="cuda")
     pos = torch.randn(N, 3, device="cuda")
     batch = torch.tensor([0] * 6 + [1] * 6, device="cuda")
-    t = torch.randn(B, device="cuda")
 
     R = G.elements[3].float().cuda()
     R_nodes = R.unsqueeze(0).expand(N, -1, -1)
 
     with torch.no_grad():
-        s0, v0 = model(x, pos, batch=batch, t=t)
+        s0, v0 = model(x, pos, batch=batch)
         pos_rot = torch.einsum("nij,nj->ni", R_nodes, pos)
-        s1, v1 = model(x, pos_rot, batch=batch, t=t)
+        s1, v1 = model(x, pos_rot, batch=batch)
 
     v0_rot = torch.einsum("nij,nkj->nki", R_nodes, v0)
     s_err = (s1 - s0).abs().max().item()

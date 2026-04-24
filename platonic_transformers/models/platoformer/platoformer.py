@@ -9,7 +9,6 @@ from platonic_transformers.models.platoformer.groups import PLATONIC_GROUPS
 from platonic_transformers.models.platoformer.linear import PlatonicLinear
 from platonic_transformers.models.platoformer.io import to_dense_and_mask, pool, lift, to_scalars_vectors
 from platonic_transformers.models.platoformer.ape import PlatonicAPE as APE
-from platonic_transformers.models.platoformer.gen_utils import TimestepEmbedder, LabelEmbedder
 
 
 class PlatonicTransformer(nn.Module):
@@ -54,7 +53,6 @@ class PlatonicTransformer(nn.Module):
         scalar_task_level: str = "graph",
         vector_task_level: str = "node",
         ffn_readout: bool = True,
-        zero_init_readout: bool = False,  # zero the final readout projection
         # Attention block specification:
         mean_aggregation: bool = False,
         dropout: float = 0.1,
@@ -71,12 +69,7 @@ class PlatonicTransformer(nn.Module):
         use_key: bool = False,
         rope_on_values: bool = False,
         attention_backend: str = "scatter",  # "scatter" | "flash"
-        qk_norm: bool = False,
         activation: str = "gelu",
-        # Diffusion / class conditioning (DiT-style AdaLN):
-        time_conditioning: bool = False,
-        class_conditioning: Optional[int] = None,  # num_classes; None disables
-        cfg_dropout: float = 0.0,                   # classifier-free guidance label dropout
     ):
         super().__init__()
 
@@ -109,18 +102,6 @@ class PlatonicTransformer(nn.Module):
         else:
             self.register_buffer('ape', None)
 
-        # Diffusion-style conditioning embedders. Blocks receive a conditioning tensor
-        # of shape (B, hidden_dim) when either time or class conditioning is active.
-        self.time_conditioning = time_conditioning
-        self.class_conditioning = class_conditioning
-        if time_conditioning:
-            self.time_embedder = TimestepEmbedder(hidden_size=hidden_dim)
-        if class_conditioning is not None:
-            self.label_embedder = LabelEmbedder(
-                num_classes=class_conditioning, hidden_size=hidden_dim, dropout_prob=cfg_dropout
-            )
-        conditioning_dim = hidden_dim if (time_conditioning or class_conditioning is not None) else None
-
         # --- Modules ---
         # 1. Input Embedding: Applied before lifting to the group.
         # Maps input features to the per-group-element hidden dimension.
@@ -151,10 +132,8 @@ class PlatonicTransformer(nn.Module):
                 use_key=use_key,
                 rope_on_values=rope_on_values,
                 attention_backend=attention_backend,
-                qk_norm=qk_norm,
-                conditioning_dim=conditioning_dim,
             ))
-            
+
         if ffn_readout:
             self.scalar_readout = nn.Sequential(
                 PlatonicLinear(self.hidden_dim, self.hidden_dim, solid_name),
@@ -164,34 +143,13 @@ class PlatonicTransformer(nn.Module):
             self.vector_readout = nn.Sequential(
                 PlatonicLinear(self.hidden_dim, self.hidden_dim, solid_name),
                 nn.GELU(),
+                PlatonicLinear(self.hidden_dim, self.hidden_dim, solid_name),
+                nn.GELU(),
                 PlatonicLinear(self.hidden_dim, self.num_G * output_dim_vec * spatial_dim, solid_name)
             )
         else:
             self.scalar_readout = PlatonicLinear(self.hidden_dim, self.num_G * output_dim, solid_name)
             self.vector_readout = PlatonicLinear(self.hidden_dim, self.num_G * output_dim_vec * spatial_dim, solid_name)
-
-        # Optional: zero the final PlatonicLinear of both readouts. Under
-        # the Karras preconditioning D = c_skip * x + c_out * F(c_in * x),
-        # starting from F = 0 means the network is a pure skip connection
-        # at init — training has to EARN any non-zero output. Without
-        # this, the readout weights can drift into a regime where the
-        # vector output magnitude explodes (we observed |D_pos| growing
-        # from 5 to 63000 over ~10 batches in a debug provocation run).
-        # Matches the DiT convention; recommended on for diffusion-style
-        # training, and the scaling-laws v2 ablation (April 2026) saw a
-        # ~10% val-loss improvement on OMol too. Not required for simple
-        # supervised regression, so defaults off.
-        if zero_init_readout:
-            self._zero_init_final_readout(self.scalar_readout)
-            self._zero_init_final_readout(self.vector_readout)
-
-    @staticmethod
-    def _zero_init_final_readout(readout: nn.Module) -> None:
-        """Zero the weights and bias of the final PlatonicLinear in a readout."""
-        final = readout[-1] if isinstance(readout, nn.Sequential) else readout
-        nn.init.zeros_(final.kernel)
-        if final.bias is not None:
-            nn.init.zeros_(final.bias)
 
     def forward(self,
                 x: Tensor,
@@ -199,8 +157,6 @@ class PlatonicTransformer(nn.Module):
                 batch: Optional[torch.Tensor] = None,
                 mask: Optional[Tensor] = None,
                 vec: Optional[Tensor] = None,
-                t: Optional[Tensor] = None,
-                y: Optional[Tensor] = None,
                 avg_num_nodes: float = 1.0) -> Tensor:
         """
         Forward pass for the Platonic Transformer.
@@ -210,10 +166,6 @@ class PlatonicTransformer(nn.Module):
             pos (Tensor): Node positions of shape (N, spatial_dims).
             batch (Tensor): Batch index for each node of shape (N,).
             mask (Tensor, optional): Attention mask of shape (B, N) or (N, N) for dense inputs.
-            t (Tensor, optional): Per-graph scalar conditioning (e.g. diffusion timestep/noise
-                level) of shape (B,). Requires time_conditioning=True.
-            y (Tensor, optional): Per-graph class labels of shape (B,). Requires
-                class_conditioning to be set.
         Returns:
             Tensor: Final predictions. Shape is (B, output_dim) for graph tasks
                     or (N, output_dim) for node tasks.
@@ -233,14 +185,6 @@ class PlatonicTransformer(nn.Module):
         x = self.x_embedder(x)  # [..., N, num_patches * C]
         x = x + self.ape(pos) if self.ape is not None else x  # Add absolute position embedding
 
-        # 2b. Build conditioning tensor (B, hidden_dim) from time and/or class inputs.
-        conditioning = None
-        if self.time_conditioning and t is not None:
-            conditioning = self.time_embedder(t)
-        if self.class_conditioning is not None and y is not None:
-            y_emb = self.label_embedder(y, train=self.training)
-            conditioning = y_emb if conditioning is None else conditioning + y_emb
-
         # 3. Equivariant Encoder (Platonic Conv Blocks)
         for layer in self.layers:
             x = layer(
@@ -248,7 +192,6 @@ class PlatonicTransformer(nn.Module):
                 pos=pos,
                 batch=batch,
                 mask=mask,
-                conditioning=conditioning,
                 avg_num_nodes=avg_num_nodes
             )
 

@@ -39,9 +39,10 @@ class EDMPrecond(torch.nn.Module):
     scales the input / output residuals.
 
     Args:
-        model: An equivariant denoiser (e.g. :class:`PlatonicTransformer`
-            with ``time_conditioning=True``) that returns
-            ``(scalars, vectors)``.
+        model: An equivariant denoiser (e.g. :class:`PlatonicTransformer`)
+            that returns ``(scalars, vectors)``. Noise level conditioning
+            is handled by concatenating ``c_noise`` to the scalar input
+            channel — no AdaLN / time embedder required.
         sigma_min: Lower bound clamp for sampling schedule (default 0).
         sigma_max: Upper bound clamp for sampling schedule (default inf).
         sigma_data: Assumed standard deviation of clean data.
@@ -91,9 +92,12 @@ class EDMPrecond(torch.nn.Module):
         # Noise is also concatenated onto the per-node scalar features.
         scalars_in = torch.cat([x_in, c_noise[batch]], dim=-1)
 
+        # Conditioning: c_noise is already concatenated onto scalars_in above.
+        # No AdaLN / time embedder — the network receives the noise level as
+        # an extra scalar channel and learns to use it directly.
         scalars_out, vecs_out = self.model(
             scalars_in, pos_in, batch, vec=None,
-            t=c_noise.squeeze(-1), avg_num_nodes=self.avg_num_nodes,
+            avg_num_nodes=self.avg_num_nodes,
         )
         F_x = x_in - scalars_out
         F_pos = pos_in - vecs_out.squeeze(1)

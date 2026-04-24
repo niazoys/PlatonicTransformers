@@ -49,22 +49,6 @@ from platonic_transformers.models.platoformer.linear import PlatonicLinear
 from platonic_transformers.models.platoformer.groups import PLATONIC_GROUPS
 
 
-class _HeadDimRMSNorm(nn.Module):
-    """RMSNorm along the last (head_dim) axis. Manual implementation because
-    torch.nn.RMSNorm triggers hundreds of per-shape specializations under
-    torch.compile + dynamic shapes, whereas a plain tensor op traces cleanly.
-    """
-
-    def __init__(self, head_dim: int, eps: float = 1e-6) -> None:
-        super().__init__()
-        self.weight = nn.Parameter(torch.ones(head_dim))
-        self.eps = eps
-
-    def forward(self, x: Tensor) -> Tensor:
-        inv_rms = torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + self.eps)
-        return x * inv_rms * self.weight
-
-
 class PlatonicConv(nn.Module):
     """
     Computes a group-equivariant dynamic convolution supporting both graph and dense modes.
@@ -94,7 +78,6 @@ class PlatonicConv(nn.Module):
         use_key: bool = False,
         rope_on_values: bool = False,
         attention_backend: str = "scatter",
-        qk_norm: bool = False,
     ):
         super().__init__()
 
@@ -164,25 +147,6 @@ class PlatonicConv(nn.Module):
 
         # Final equivariant linear layer
         self.out_proj = PlatonicLinear(embed_dim, out_channels, solid_name, bias=bias)
-
-        # Optional QK-norm: RMSNorm along head_dim on Q and K, applied before
-        # RoPE / attention. Bounds attention scores regardless of how large
-        # the underlying activations get — used in SD3, FLUX, HunyuanDiT,
-        # ViT-22B to prevent attention-saturation / softmax-collapse
-        # instability at scale. Equivariance-preserving: the normalization is
-        # along head_dim, which the group action does not permute
-        # (the group permutes G and H axes; head_dim is invariant).
-        #
-        # Manual implementation instead of nn.RMSNorm because the latter
-        # triggers hundreds of per-shape specializations under torch.compile
-        # + dynamic batch shapes (our QM9 molecules have variable atom
-        # counts). A plain tensor op traces cleanly with zero recompiles.
-        if qk_norm:
-            self.q_norm = _HeadDimRMSNorm(self.head_dim, eps=1e-6)
-            self.k_norm = _HeadDimRMSNorm(self.head_dim, eps=1e-6)
-        else:
-            self.q_norm = nn.Identity()
-            self.k_norm = nn.Identity()
     
     def _forward_shared(self, x: Tensor, pos: Tensor):
         """Shared logic for projections and RoPE application."""
@@ -197,12 +161,6 @@ class PlatonicConv(nn.Module):
         q = q_raw.view(*leading_dims, self.num_G, self.effective_num_heads, self.head_dim)
         v = v_raw.view(*leading_dims, self.num_G, self.effective_num_heads, self.head_dim)
         k = k_raw.view(*leading_dims, self.num_G, self.effective_num_heads, self.head_dim)
-
-        # QK-norm (identity if disabled) before RoPE. Normalizes each
-        # (N, G, H) head-vector along head_dim, so attention scores q·k are
-        # bounded regardless of input activation magnitude.
-        q = self.q_norm(q)
-        k = self.k_norm(k)
 
         # Apply RoPE to query and key (and optionally value, per GTA Eq. 5)
         if self.rope_emb is not None:
