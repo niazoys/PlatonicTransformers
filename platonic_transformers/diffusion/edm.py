@@ -120,6 +120,16 @@ class EDMLoss:
             channel (one integer per atom, larger dynamic range) when
             ``use_charges`` is ``True``.
         use_charges: whether the sixth feature column is a formal charge.
+        max_weight: optional upper clamp on the per-sample loss weight.
+            The Karras weighting ``(sigma**2 + sigma_data**2) /
+            (sigma * sigma_data)**2`` behaves like ``1/sigma**2`` in the
+            small-sigma limit, so rare log-normal tails draw weights in
+            the 1e5 range and can single-handedly blow up training
+            (observed as a single spike that corrupts weights even with
+            gradient clipping). Clamping at ~1e3 shaves off the pathology
+            while leaving the bulk of the distribution untouched
+            (probability mass above ~1e3 is well under 0.1% with the
+            default P_mean/P_std). Set to None to disable.
     """
 
     def __init__(
@@ -130,6 +140,7 @@ class EDMLoss:
         normalize_x_factor: float = 4.0,
         normalize_charge_factor: float = 8.0,
         use_charges: bool = True,
+        max_weight: Optional[float] = 1000.0,
     ) -> None:
         self.P_mean = P_mean
         self.P_std = P_std
@@ -137,6 +148,7 @@ class EDMLoss:
         self.normalize_x_factor = normalize_x_factor
         self.normalize_charge_factor = normalize_charge_factor
         self.use_charges = use_charges
+        self.max_weight = max_weight
 
     def __call__(self, net: EDMPrecond, inputs: dict) -> Tuple[Tensor, Tuple[Tensor, Tensor]]:
         pos, x, batch = inputs["pos"], inputs["x"], inputs["batch"]
@@ -154,6 +166,8 @@ class EDMLoss:
         )[batch]
         sigma = (rnd_normal * self.P_std + self.P_mean).exp()
         weight = (sigma ** 2 + self.sigma_data ** 2) / (sigma * self.sigma_data) ** 2
+        if self.max_weight is not None:
+            weight = weight.clamp(max=self.max_weight)
 
         x_noisy = x + torch.randn_like(x) * sigma
         pos_noisy = pos + subtract_mean(torch.randn_like(pos), batch) * sigma
