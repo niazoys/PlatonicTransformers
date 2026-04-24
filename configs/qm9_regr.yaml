@@ -49,11 +49,6 @@ training:
   batch_size: 96
   gradient_clip_val: 0.5
   train_augm: true  # Rotation augmentation
-  # Optional EMA (off by default for supervised regression; enable via CLI override
-  # to reproduce diffusion-style stability benefits).
-  ema_enabled: false
-  ema_decay: 0.9999
-  ema_warmup_steps: 2000
 
 # Optimizer configuration
 optimizer:

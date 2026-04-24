@@ -27,7 +27,6 @@ from platonic_transformers.utils.config_loader import (
 )
 from platonic_transformers.utils.utils import CosineWarmupScheduler, RandomSOd
 from platonic_transformers.utils.callbacks import (
-    EMACallback,
     StopOnPersistentDivergence,
     TimerCallback,
 )
@@ -372,13 +371,6 @@ def main(config: ml_collections.ConfigDict) -> None:
             patience=es_config.patience,
             grace_epochs=es_config.grace_epochs,
             verbose=False
-        ))
-
-    # Optional EMA (off by default for regression; controlled via config.training.ema_enabled).
-    if config.training.get("ema_enabled", False):
-        callbacks.append(EMACallback(
-            decay=config.training.get("ema_decay", 0.9999),
-            warmup_steps=config.training.get("ema_warmup_steps", 2000),
         ))
 
     trainer = pl.Trainer(
