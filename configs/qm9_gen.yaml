@@ -78,6 +78,17 @@ training:
   ema_enabled: true
   ema_decay: 0.9999
   ema_warmup_steps: 2000
+  # Batch-level spike/NaN guard: skip optimizer.step() if the current batch
+  # loss exceeds ``loss_spike_threshold * running_ema_of_loss`` (or is
+  # non-finite). Running EMA updates on *all* finite batches so a spike
+  # briefly raises the bar rather than being hidden by a low EMA that's
+  # only trained on accepted samples. Threshold 50 is well above normal
+  # batch-to-batch variance (~3x) but catches the rare 1000x excursions
+  # from small-sigma tail samples. Set 0.0 to disable spike detection
+  # (NaN/Inf still caught).
+  loss_spike_threshold: 50.0
+  loss_ema_decay: 0.99
+  loss_spike_warmup_steps: 200
 
 # Optimizer configuration
 optimizer:
