@@ -130,9 +130,11 @@ class QM9GenModel(pl.LightningModule):
         self.edm_analyzer = None
         self.zatom_analyzer = None
 
-        # Counts NaN/Inf batches that have been dropped without an optimizer
-        # step. Expected to stay at 0; any non-zero value is worth
-        # investigating.
+        # Running EMA of recent training loss for spike detection (see
+        # training_step). Computed outside the graph; only used to decide
+        # whether to skip an optimizer step on a statistically anomalous
+        # batch.
+        self._loss_ema: Optional[float] = None
         self._skip_counter: int = 0
 
     def set_num_atoms_sampler(self, num_atoms_sampler):
@@ -153,17 +155,44 @@ class QM9GenModel(pl.LightningModule):
         loss, _ = self.criterion(self.model, batch)
         batch_size = batch["batch"].max() + 1
 
-        # NaN/Inf guard only. With zero-init on the final readouts, the
-        # model starts as a skip connection and can't drift into the huge-
-        # |D_pos| regime that drove the earlier training-loss spikes. The
-        # per-sample weight clamp in EDMLoss handles the residual sigma-
-        # tail noise. Gradient clipping is a standard safety net.
+        # Spike / NaN guard. Zero-init and QK-norm together reduce the
+        # frequency of training-loss spikes but don't fully eliminate them —
+        # we've observed multi-batch ramps to 1e6+ loss values even with
+        # the clean architectural stack. Skip optimizer.step() on NaN/Inf
+        # OR on batches that exceed ``loss_spike_threshold * running_ema``.
+        # Empirically normal batch variance stays < 6x median; real spikes
+        # are 100-1e6x, so threshold=10x cleanly separates them. Running
+        # EMA is only updated on accepted batches, so a skipped spike
+        # doesn't pollute the reference.
+        spike_thr = self.config.training.get("loss_spike_threshold", 10.0)
+        ema_beta = self.config.training.get("loss_ema_decay", 0.99)
+        warmup_steps = self.config.training.get("loss_spike_warmup_steps", 200)
         loss_val = loss.detach().item()
+
+        skip = False
         if not np.isfinite(loss_val):
+            skip = True
+        elif (
+            spike_thr > 0
+            and self._loss_ema is not None
+            and self.global_step >= warmup_steps
+            and loss_val > spike_thr * self._loss_ema
+        ):
+            skip = True
+
+        if skip:
             self._skip_counter += 1
             self.log("train/skipped_batches", float(self._skip_counter),
                      on_step=True, on_epoch=False, logger=True, batch_size=batch_size)
+            self.log("train/skipped_loss_val", loss_val,
+                     on_step=True, on_epoch=False, logger=True, batch_size=batch_size)
             return None
+
+        # Update EMA only on accepted batches.
+        if self._loss_ema is None:
+            self._loss_ema = loss_val
+        else:
+            self._loss_ema = ema_beta * self._loss_ema + (1.0 - ema_beta) * loss_val
 
         self.log(
             "train/loss",
@@ -174,6 +203,8 @@ class QM9GenModel(pl.LightningModule):
             logger=True,
             batch_size=batch_size,
         )
+        self.log("train/loss_ema", self._loss_ema, on_step=True, on_epoch=False,
+                 logger=True, batch_size=batch_size)
         return loss
 
     def validation_step(self, batch, batch_idx):
