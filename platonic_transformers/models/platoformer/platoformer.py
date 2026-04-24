@@ -170,6 +170,30 @@ class PlatonicTransformer(nn.Module):
             self.scalar_readout = PlatonicLinear(self.hidden_dim, self.num_G * output_dim, solid_name)
             self.vector_readout = PlatonicLinear(self.hidden_dim, self.num_G * output_dim_vec * spatial_dim, solid_name)
 
+        # Zero-init the final projection of both readouts when running in
+        # diffusion mode. Under the Karras preconditioning, D = c_skip * x
+        # + c_out * F(c_in * x), so F = 0 at init means the network starts
+        # as a pure skip connection (predicts clean data for tiny sigma,
+        # predicts 0 for huge sigma). Training then has to EARN any
+        # non-zero output. Without this, the unbounded 3-layer vector
+        # readout was liable to drift into a regime where |vecs_out|
+        # explodes (observed in the debug provocation run: |D_pos| grew
+        # from 5 to 63000 over ~10 batches). This is the DiT convention
+        # (their FinalLayer.linear is zero-initialized for the same
+        # reason). Only applies when conditioning is active — for
+        # non-diffusion tasks the existing initialization is preserved.
+        if time_conditioning or class_conditioning is not None:
+            self._zero_init_final_readout(self.scalar_readout)
+            self._zero_init_final_readout(self.vector_readout)
+
+    @staticmethod
+    def _zero_init_final_readout(readout: nn.Module) -> None:
+        """Zero the weights and bias of the final PlatonicLinear in a readout."""
+        final = readout[-1] if isinstance(readout, nn.Sequential) else readout
+        nn.init.zeros_(final.kernel)
+        if final.bias is not None:
+            nn.init.zeros_(final.bias)
+
     def forward(self,
                 x: Tensor,
                 pos: Tensor,
