@@ -23,6 +23,7 @@ model:
   scalar_task_level: "node"
   vector_task_level: "node"
   ffn_readout: true
+  zero_init_readout: true           # start model as skip connection (F=0); DiT convention
 
   # Attention / regularisation
   mean_aggregation: false

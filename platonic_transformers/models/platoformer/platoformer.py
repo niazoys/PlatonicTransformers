@@ -54,6 +54,7 @@ class PlatonicTransformer(nn.Module):
         scalar_task_level: str = "graph",
         vector_task_level: str = "node",
         ffn_readout: bool = True,
+        zero_init_readout: bool = False,  # zero the final readout projection
         # Attention block specification:
         mean_aggregation: bool = False,
         dropout: float = 0.1,
@@ -167,19 +168,18 @@ class PlatonicTransformer(nn.Module):
             self.scalar_readout = PlatonicLinear(self.hidden_dim, self.num_G * output_dim, solid_name)
             self.vector_readout = PlatonicLinear(self.hidden_dim, self.num_G * output_dim_vec * spatial_dim, solid_name)
 
-        # Zero-init the final projection of both readouts when running in
-        # diffusion mode. Under the Karras preconditioning, D = c_skip * x
-        # + c_out * F(c_in * x), so F = 0 at init means the network starts
-        # as a pure skip connection (predicts clean data for tiny sigma,
-        # predicts 0 for huge sigma). Training then has to EARN any
-        # non-zero output. Without this, the unbounded 3-layer vector
-        # readout was liable to drift into a regime where |vecs_out|
-        # explodes (observed in the debug provocation run: |D_pos| grew
-        # from 5 to 63000 over ~10 batches). This is the DiT convention
-        # (their FinalLayer.linear is zero-initialized for the same
-        # reason). Only applies when conditioning is active — for
-        # non-diffusion tasks the existing initialization is preserved.
-        if time_conditioning or class_conditioning is not None:
+        # Optional: zero the final PlatonicLinear of both readouts. Under
+        # the Karras preconditioning D = c_skip * x + c_out * F(c_in * x),
+        # starting from F = 0 means the network is a pure skip connection
+        # at init — training has to EARN any non-zero output. Without
+        # this, the readout weights can drift into a regime where the
+        # vector output magnitude explodes (we observed |D_pos| growing
+        # from 5 to 63000 over ~10 batches in a debug provocation run).
+        # Matches the DiT convention; recommended on for diffusion-style
+        # training, and the scaling-laws v2 ablation (April 2026) saw a
+        # ~10% val-loss improvement on OMol too. Not required for simple
+        # supervised regression, so defaults off.
+        if zero_init_readout:
             self._zero_init_final_readout(self.scalar_readout)
             self._zero_init_final_readout(self.vector_readout)
 
