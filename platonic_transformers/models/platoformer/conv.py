@@ -49,6 +49,22 @@ from platonic_transformers.models.platoformer.linear import PlatonicLinear
 from platonic_transformers.models.platoformer.groups import PLATONIC_GROUPS
 
 
+class _HeadDimRMSNorm(nn.Module):
+    """RMSNorm along the last (head_dim) axis. Manual implementation because
+    torch.nn.RMSNorm triggers hundreds of per-shape specializations under
+    torch.compile + dynamic shapes, whereas a plain tensor op traces cleanly.
+    """
+
+    def __init__(self, head_dim: int, eps: float = 1e-6) -> None:
+        super().__init__()
+        self.weight = nn.Parameter(torch.ones(head_dim))
+        self.eps = eps
+
+    def forward(self, x: Tensor) -> Tensor:
+        inv_rms = torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + self.eps)
+        return x * inv_rms * self.weight
+
+
 class PlatonicConv(nn.Module):
     """
     Computes a group-equivariant dynamic convolution supporting both graph and dense modes.
@@ -156,9 +172,14 @@ class PlatonicConv(nn.Module):
         # instability at scale. Equivariance-preserving: the normalization is
         # along head_dim, which the group action does not permute
         # (the group permutes G and H axes; head_dim is invariant).
+        #
+        # Manual implementation instead of nn.RMSNorm because the latter
+        # triggers hundreds of per-shape specializations under torch.compile
+        # + dynamic batch shapes (our QM9 molecules have variable atom
+        # counts). A plain tensor op traces cleanly with zero recompiles.
         if qk_norm:
-            self.q_norm = nn.RMSNorm(self.head_dim, eps=1e-6)
-            self.k_norm = nn.RMSNorm(self.head_dim, eps=1e-6)
+            self.q_norm = _HeadDimRMSNorm(self.head_dim, eps=1e-6)
+            self.k_norm = _HeadDimRMSNorm(self.head_dim, eps=1e-6)
         else:
             self.q_norm = nn.Identity()
             self.k_norm = nn.Identity()
