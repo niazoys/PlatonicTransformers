@@ -27,17 +27,16 @@ class EDMPrecond(torch.nn.Module):
     the four scalars computed from ``sigma`` and the assumed data std
     ``sigma_data``. The wrapped ``model`` is the residual network ``F``.
 
-    The preconditioner handles two calling conventions for ``sigma``:
-      * **Per-node** (shape ``[N]`` or ``[N, 1]``) — what :class:`EDMLoss`
-        emits during training. Values are expected to be constant within
-        a graph (same sigma for every atom of molecule *i*); we reduce to
-        a per-graph tensor with ``unique_consecutive``.
-      * **Per-graph** (shape ``[B]`` or ``[B, 1]``) — what the sampler
-        emits; we broadcast back to per-node via the batch index.
-      * **Scalar** — expanded to per-graph.
+    The preconditioner expects ``sigma`` already at per-graph resolution
+    (shape ``[B]`` or ``[B, 1]``), or a scalar to be broadcast. Both
+    :class:`EDMLoss` and :func:`edm_sampler` now pass per-graph sigma
+    directly — an earlier path that reconstructed per-graph sigma from a
+    per-node tensor via ``unique_consecutive`` was fragile when two
+    consecutive graphs happened to produce the same clamped sigma value.
 
     The per-graph sigma is passed to the model as the time/noise embedding
-    ``t``; the per-node sigma scales the input / output residuals.
+    ``t``; the per-node sigma (obtained via ``sigma_per_graph[batch]``)
+    scales the input / output residuals.
 
     Args:
         model: An equivariant denoiser (e.g. :class:`PlatonicTransformer`
@@ -71,12 +70,14 @@ class EDMPrecond(torch.nn.Module):
     ) -> Tuple[Tensor, Tensor]:
         sigma = sigma.reshape(-1, 1)
         num_graphs = int(batch.max().item()) + 1
-        if sigma.shape[0] == batch.shape[0]:
-            sigma_per_graph = torch.unique_consecutive(sigma.squeeze(-1)).reshape(-1, 1)
-        elif sigma.numel() == 1:
+        if sigma.numel() == 1:
             sigma_per_graph = sigma.expand(num_graphs, 1)
         else:
             sigma_per_graph = sigma
+        assert sigma_per_graph.shape[0] == num_graphs, (
+            f"sigma must be per-graph (shape [B, 1]); got {tuple(sigma_per_graph.shape)} "
+            f"for {num_graphs} graphs"
+        )
         sigma_per_node = sigma_per_graph[batch]  # (N, 1)
 
         c_skip = self.sigma_data ** 2 / (sigma_per_node ** 2 + self.sigma_data ** 2)
@@ -165,20 +166,26 @@ class EDMLoss:
         else:
             x = x / self.normalize_x_factor
 
+        num_graphs = int(batch.max().item()) + 1
         rnd_normal = torch.randn(
-            [batch.max() + 1, 1], device=pos.device, dtype=torch.float32
-        )[batch]
-        sigma = (rnd_normal * self.P_std + self.P_mean).exp()
+            [num_graphs, 1], device=pos.device, dtype=torch.float32
+        )
+        sigma_per_graph = (rnd_normal * self.P_std + self.P_mean).exp()
         if self.sigma_min_train is not None:
-            sigma = sigma.clamp(min=self.sigma_min_train)
+            sigma_per_graph = sigma_per_graph.clamp(min=self.sigma_min_train)
         if self.sigma_max_train is not None:
-            sigma = sigma.clamp(max=self.sigma_max_train)
+            sigma_per_graph = sigma_per_graph.clamp(max=self.sigma_max_train)
+        sigma = sigma_per_graph[batch]  # (N, 1) for noise injection
         weight = (sigma ** 2 + self.sigma_data ** 2) / (sigma * self.sigma_data) ** 2
 
         x_noisy = x + torch.randn_like(x) * sigma
         pos_noisy = pos + subtract_mean(torch.randn_like(pos), batch) * sigma
 
-        D_x, D_pos = net(x_noisy, pos_noisy, batch, sigma)
+        # Pass the per-graph sigma to the preconditioner directly; the old
+        # per-node path relied on torch.unique_consecutive to reconstruct
+        # per-graph sigma, which silently miscounts graphs whenever two
+        # consecutive graphs clamp (or draw) the same sigma value.
+        D_x, D_pos = net(x_noisy, pos_noisy, batch, sigma_per_graph)
         error_x = (D_x - x) ** 2
         error_pos = (D_pos - pos) ** 2
         loss = (weight * error_x).mean() + (weight * error_pos).mean()
