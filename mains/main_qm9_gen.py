@@ -120,7 +120,8 @@ class QM9GenModel(pl.LightningModule):
             normalize_x_factor=config.diffusion.normalize_x_factor,
             normalize_charge_factor=config.diffusion.normalize_charge_factor,
             use_charges=use_charges,
-            max_weight=config.diffusion.get("max_weight", 1000.0),
+            sigma_min_train=config.diffusion.get("sigma_min_train", 0.03),
+            sigma_max_train=config.diffusion.get("sigma_max_train", 100.0),
         )
         self.rotation_generator = RandomSOd(3)
 

@@ -50,12 +50,15 @@ diffusion:
   normalize_x_factor: 4.0
   normalize_charge_factor: 8.0
   avg_num_nodes: 18.0               # QM9 average molecule size
-  # Clip EDM's Karras weighting from above. The ``(sigma^2+sigma_d^2)/(sigma*sigma_d)^2``
-  # term explodes like 1/sigma^2 at log-normal tails and can produce a single
-  # batch loss 100x the running mean, irrecoverably corrupting weights (observed
-  # in both DiP-trivial and DiP-tetra runs before this fix). Clamp at ~1e3 to
-  # truncate the worst tail; set to null to disable.
-  max_weight: 1000.0
+  # Training-time sigma clamps. The Karras weighting
+  # (sigma^2+sigma_d^2)/(sigma*sigma_d)^2 explodes like 1/sigma^2 at the
+  # small-sigma tail of the log-normal prior and can produce a single batch
+  # loss 100x the running mean, irrecoverably corrupting weights (observed in
+  # DiP-trivial and DiP-tetra verification runs). Clamping sigma at 0.03 caps
+  # the weight at ~1e3 while leaving the bulk of the distribution untouched.
+  # Set either to null to disable.
+  sigma_min_train: 0.03
+  sigma_max_train: 100.0
   # Sampling
   num_steps: 50
   sigma_min: 0.002
