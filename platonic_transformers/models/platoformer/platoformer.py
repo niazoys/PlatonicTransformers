@@ -71,6 +71,7 @@ class PlatonicTransformer(nn.Module):
         use_key: bool = False,
         rope_on_values: bool = False,
         attention_backend: str = "scatter",  # "scatter" | "flash"
+        qk_norm: bool = False,
         activation: str = "gelu",
         # Diffusion / class conditioning (DiT-style AdaLN):
         time_conditioning: bool = False,
@@ -150,6 +151,7 @@ class PlatonicTransformer(nn.Module):
                 use_key=use_key,
                 rope_on_values=rope_on_values,
                 attention_backend=attention_backend,
+                qk_norm=qk_norm,
                 conditioning_dim=conditioning_dim,
             ))
             
