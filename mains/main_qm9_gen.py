@@ -152,30 +152,21 @@ class QM9GenModel(pl.LightningModule):
         loss, _ = self.criterion(self.model, batch)
         batch_size = batch["batch"].max() + 1
 
-        # Spike / NaN guard. EDMLoss clamps the per-sample weight, which
-        # bounds normal-tail variance, but occasional model-output excursions
-        # (e.g. |F| ~ 40 at small sigma) still make a single batch produce
-        # loss ~1000x the running mean. Gradient clipping handles the direction
-        # but we still see the value in the training log. Skip the optimizer
-        # step whenever:
-        #   (a) loss is non-finite (NaN/Inf), or
-        #   (b) loss > spike_threshold * running_ema_of_loss AFTER a warmup
-        #       window during which the EMA stabilizes.
-        # Running EMA is updated on *all* finite batches (not only accepted),
-        # so a spike briefly raises the bar instead of having the EMA drift
-        # artificially low (which was the bug in an earlier 8x-threshold
-        # revision that ended up rejecting ~70% of batches).
-        spike_thr = self.config.training.get("loss_spike_threshold", 50.0)
+        # Spike / NaN guard. EDMLoss clamps the per-sample weight but the
+        # MODEL itself occasionally produces wild outputs for rare input /
+        # conditioning combinations (compile-kernel transients, AdaLN
+        # instability, tiny-sigma regime numerics). Empirically these spikes
+        # are cleanly separated from normal batch variance: a healthy QM9-gen
+        # run on our setup has batch losses in [0.45, 4.0] (max ~6x median),
+        # while spikes are hundreds to hundreds-of-thousands of x median.
+        # Skip the optimizer step on non-finite loss, or when loss exceeds
+        # ``loss_spike_threshold * running_ema_of_loss`` after a warmup
+        # window. The running EMA is only updated on accepted batches, so a
+        # skipped spike leaves no trace in the reference baseline.
+        spike_thr = self.config.training.get("loss_spike_threshold", 10.0)
         ema_beta = self.config.training.get("loss_ema_decay", 0.99)
         warmup_steps = self.config.training.get("loss_spike_warmup_steps", 200)
         loss_val = loss.detach().item()
-
-        # Update EMA on all finite batches BEFORE deciding to skip.
-        if np.isfinite(loss_val):
-            if self._loss_ema is None:
-                self._loss_ema = loss_val
-            else:
-                self._loss_ema = ema_beta * self._loss_ema + (1.0 - ema_beta) * loss_val
 
         skip = False
         if not np.isfinite(loss_val):
@@ -196,6 +187,12 @@ class QM9GenModel(pl.LightningModule):
                      on_step=True, on_epoch=False, logger=True, batch_size=batch_size)
             return None
 
+        # Update EMA only on accepted batches.
+        if self._loss_ema is None:
+            self._loss_ema = loss_val
+        else:
+            self._loss_ema = ema_beta * self._loss_ema + (1.0 - ema_beta) * loss_val
+
         self.log(
             "train/loss",
             loss,
@@ -205,9 +202,8 @@ class QM9GenModel(pl.LightningModule):
             logger=True,
             batch_size=batch_size,
         )
-        if self._loss_ema is not None:
-            self.log("train/loss_ema", self._loss_ema, on_step=True, on_epoch=False,
-                     logger=True, batch_size=batch_size)
+        self.log("train/loss_ema", self._loss_ema, on_step=True, on_epoch=False,
+                 logger=True, batch_size=batch_size)
         return loss
 
     def validation_step(self, batch, batch_idx):
