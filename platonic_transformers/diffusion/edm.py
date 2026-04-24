@@ -121,18 +121,18 @@ class EDMLoss:
             channel (one integer per atom, larger dynamic range) when
             ``use_charges`` is ``True``.
         use_charges: whether the sixth feature column is a formal charge.
-        sigma_min_train: lower clamp on sigma at loss time. The Karras
-            weighting ``(sigma**2 + sigma_data**2) / (sigma * sigma_data)**2``
-            behaves like ``1/sigma**2`` in the small-sigma limit, so rare
-            log-normal tails push the weight into the 1e5 range and can
-            single-handedly blow up training (observed as a single spike
-            that corrupts weights even with gradient clipping). Clamping
-            sigma at ~0.03 caps the weight at ~1e3 while leaving the
-            bulk of the distribution untouched.
-        sigma_max_train: upper clamp on sigma at loss time. Doesn't
-            affect weight stability (weight → 1 as sigma → inf) but
-            keeps the target pattern finite. Set either bound to
-            ``None`` to disable.
+        max_weight: optional upper clamp on the per-sample loss weight.
+            The Karras weighting ``(sigma**2 + sigma_data**2) /
+            (sigma * sigma_data)**2`` behaves like ``1/sigma**2`` in the
+            small-sigma limit, so rare log-normal tails push the weight
+            into the 1e5+ range. A single unlucky batch can then produce
+            a loss 100x the running mean that corrupts weights even with
+            gradient clipping (directional bias survives norm-rescaling).
+            Clamping the weight is gentler than clamping sigma itself:
+            the true sigma is still used in the forward noise injection,
+            so we don't shift the training distribution — we only cap
+            the sample's influence on the loss average. Default 1e3
+            truncates the worst 0.1% tail; set to None to disable.
     """
 
     def __init__(
@@ -143,8 +143,7 @@ class EDMLoss:
         normalize_x_factor: float = 4.0,
         normalize_charge_factor: float = 8.0,
         use_charges: bool = True,
-        sigma_min_train: Optional[float] = 0.03,
-        sigma_max_train: Optional[float] = 100.0,
+        max_weight: Optional[float] = 1000.0,
     ) -> None:
         self.P_mean = P_mean
         self.P_std = P_std
@@ -152,8 +151,7 @@ class EDMLoss:
         self.normalize_x_factor = normalize_x_factor
         self.normalize_charge_factor = normalize_charge_factor
         self.use_charges = use_charges
-        self.sigma_min_train = sigma_min_train
-        self.sigma_max_train = sigma_max_train
+        self.max_weight = max_weight
 
     def __call__(self, net: EDMPrecond, inputs: dict) -> Tuple[Tensor, Tuple[Tensor, Tensor]]:
         pos, x, batch = inputs["pos"], inputs["x"], inputs["batch"]
@@ -171,12 +169,10 @@ class EDMLoss:
             [num_graphs, 1], device=pos.device, dtype=torch.float32
         )
         sigma_per_graph = (rnd_normal * self.P_std + self.P_mean).exp()
-        if self.sigma_min_train is not None:
-            sigma_per_graph = sigma_per_graph.clamp(min=self.sigma_min_train)
-        if self.sigma_max_train is not None:
-            sigma_per_graph = sigma_per_graph.clamp(max=self.sigma_max_train)
         sigma = sigma_per_graph[batch]  # (N, 1) for noise injection
         weight = (sigma ** 2 + self.sigma_data ** 2) / (sigma * self.sigma_data) ** 2
+        if self.max_weight is not None:
+            weight = weight.clamp(max=self.max_weight)
 
         x_noisy = x + torch.randn_like(x) * sigma
         pos_noisy = pos + subtract_mean(torch.randn_like(pos), batch) * sigma

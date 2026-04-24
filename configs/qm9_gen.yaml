@@ -50,15 +50,14 @@ diffusion:
   normalize_x_factor: 4.0
   normalize_charge_factor: 8.0
   avg_num_nodes: 18.0               # QM9 average molecule size
-  # Training-time sigma clamps. The Karras weighting
+  # Per-sample loss weight clamp. The Karras weighting
   # (sigma^2+sigma_d^2)/(sigma*sigma_d)^2 explodes like 1/sigma^2 at the
   # small-sigma tail of the log-normal prior and can produce a single batch
-  # loss 100x the running mean, irrecoverably corrupting weights (observed in
-  # DiP-trivial and DiP-tetra verification runs). Clamping sigma at 0.03 caps
-  # the weight at ~1e3 while leaving the bulk of the distribution untouched.
-  # Set either to null to disable.
-  sigma_min_train: 0.03
-  sigma_max_train: 100.0
+  # loss 100x the running mean, irrecoverably corrupting weights (observed
+  # in DiP-trivial and DiP-tetra verification runs). Clamping the *weight*
+  # (rather than sigma itself) caps each sample's contribution to the loss
+  # without shifting the training noise distribution. Set to null to disable.
+  max_weight: 1000.0
   # Sampling
   num_steps: 50
   sigma_min: 0.002
@@ -79,15 +78,6 @@ training:
   ema_enabled: true
   ema_decay: 0.9999
   ema_warmup_steps: 2000
-  # Batch-level spike guard: skip optimizer.step() if the current batch loss
-  # exceeds ``loss_spike_threshold * running_ema_of_loss``, or if the loss is
-  # non-finite. running_ema is updated with decay ``loss_ema_decay`` only on
-  # non-skipped batches. Disabled (0.0) means we rely solely on gradient
-  # clipping. 8x is conservative: normal QM9-gen training loss varies within
-  # roughly 2x the recent mean, so 8x cleanly isolates pathological spikes.
-  loss_spike_threshold: 8.0
-  loss_ema_decay: 0.99
-  loss_spike_warmup_steps: 200
 
 # Optimizer configuration
 optimizer:
