@@ -27,6 +27,7 @@ from platonic_transformers.utils.config_loader import (
 )
 from platonic_transformers.utils.utils import CosineWarmupScheduler, RandomSOd
 from platonic_transformers.utils.callbacks import (
+    EMACallback,
     StopOnPersistentDivergence,
     TimerCallback,
 )
@@ -203,7 +204,22 @@ class QM9Model(pl.LightningModule):
         self.valid_metric(pred * self.scale + self.shift, graph.y)
 
     def test_step(self, graph: Data, batch_idx: int) -> None:
-        pred = self(graph)
+        # Test-time augmentation: average predictions over N random SO(3)
+        # rotations. The model is rotation-equivariant but variable-atom-count
+        # numerical precision introduces small noise in fp32 matmuls; TTA
+        # averages it out (ponita QM9 convention).
+        n_repeats = self.config.testing.get("repeats", 1)
+        if n_repeats <= 1:
+            pred = self(graph)
+        else:
+            preds = []
+            original_pos = graph.pos.clone()
+            for _ in range(n_repeats):
+                rots = self.rotation_generator(n=graph.batch.max().item() + 1).type_as(original_pos)
+                graph.pos = torch.einsum("bij,bj->bi", rots[graph.batch], original_pos)
+                preds.append(self(graph))
+            graph.pos = original_pos
+            pred = torch.stack(preds).mean(dim=0)
         self.test_metric(pred * self.scale + self.shift, graph.y)
 
     def on_train_epoch_end(self) -> None:
@@ -371,6 +387,15 @@ def main(config: ml_collections.ConfigDict) -> None:
             patience=es_config.patience,
             grace_epochs=es_config.grace_epochs,
             verbose=False
+        ))
+
+    # Light EMA (decay=0.99, ~70-step half-life). Ponita QM9 convention —
+    # lightly smooths validation while still tracking the cosine-LR descent,
+    # unlike the aggressive 0.9999 diffusion decay we tried earlier.
+    if config.training.get("ema_enabled", False):
+        callbacks.append(EMACallback(
+            decay=config.training.get("ema_decay", 0.99),
+            warmup_steps=config.training.get("ema_warmup_steps", 0),
         ))
 
     trainer = pl.Trainer(
