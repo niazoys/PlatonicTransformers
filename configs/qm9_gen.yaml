@@ -42,7 +42,7 @@ model:
   rope_on_values: true              # Public-repo GTA-style RoPE on values
   compile: true                     # torch.compile the backbone (mandatory for PlatoFormer)
   attention_backend: "flash"        # "scatter" (fp32 fallback) | "flash" (faster, sidesteps scatter-path compile bugs)
-  qk_norm: true                     # RMSNorm Q,K before RoPE/attention (SD3/FLUX convention, training stability at scale)
+  qk_norm: false                    # available via flag; no measurable benefit in our QM9-gen runs — keeping off
 
 # Diffusion (Karras EDM) configuration
 diffusion:
