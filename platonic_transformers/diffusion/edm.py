@@ -152,10 +152,6 @@ class EDMLoss:
         self.normalize_charge_factor = normalize_charge_factor
         self.use_charges = use_charges
         self.max_weight = max_weight
-        # Debug: populated every __call__, read by the Lightning module to log
-        # per-step diagnostics. Keys: sigma_min, sigma_max, F_x_absmax,
-        # F_pos_absmax, D_x_absmax, D_pos_absmax, error_x_absmax, error_pos_absmax.
-        self.last_stats: dict = {}
 
     def __call__(self, net: EDMPrecond, inputs: dict) -> Tuple[Tensor, Tuple[Tensor, Tensor]]:
         pos, x, batch = inputs["pos"], inputs["x"], inputs["batch"]
@@ -189,20 +185,6 @@ class EDMLoss:
         error_x = (D_x - x) ** 2
         error_pos = (D_pos - pos) ** 2
         loss = (weight * error_x).mean() + (weight * error_pos).mean()
-
-        # Diagnostic stats. All cheap single-scalar reductions; skip in non-
-        # training if desired by just not reading self.last_stats.
-        with torch.no_grad():
-            self.last_stats = {
-                "sigma_min": sigma_per_graph.min().item(),
-                "sigma_max": sigma_per_graph.max().item(),
-                "D_x_absmax": D_x.abs().max().item(),
-                "D_pos_absmax": D_pos.abs().max().item(),
-                "error_x_absmax": error_x.sqrt().max().item(),
-                "error_pos_absmax": error_pos.sqrt().max().item(),
-                "weight_max": weight.max().item(),
-                "weight_mean": weight.mean().item(),
-            }
         return loss, (D_x, D_pos)
 
 

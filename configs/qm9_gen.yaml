@@ -78,16 +78,6 @@ training:
   ema_enabled: true
   ema_decay: 0.9999
   ema_warmup_steps: 2000
-  # Batch-level spike/NaN guard: skip optimizer.step() if the current batch
-  # loss exceeds ``loss_spike_threshold * running_ema_of_loss`` (or is
-  # non-finite). Running EMA is maintained only over accepted batches so a
-  # skipped spike can't pollute the reference baseline. On a healthy QM9-gen
-  # run normal batch losses stay under ~6x median, while actual pathological
-  # spikes are 100x-1e6x median, so threshold 10 cleanly separates the two.
-  # Set 0.0 to disable (NaN/Inf still caught).
-  loss_spike_threshold: 10.0
-  loss_ema_decay: 0.99
-  loss_spike_warmup_steps: 200
 
 # Optimizer configuration
 optimizer:
