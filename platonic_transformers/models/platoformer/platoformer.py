@@ -143,8 +143,6 @@ class PlatonicTransformer(nn.Module):
             self.vector_readout = nn.Sequential(
                 PlatonicLinear(self.hidden_dim, self.hidden_dim, solid_name),
                 nn.GELU(),
-                PlatonicLinear(self.hidden_dim, self.hidden_dim, solid_name),
-                nn.GELU(),
                 PlatonicLinear(self.hidden_dim, self.num_G * output_dim_vec * spatial_dim, solid_name)
             )
         else:
