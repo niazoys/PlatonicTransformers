@@ -113,6 +113,13 @@ class EMACallback(pl.Callback):
                     # A new parameter appeared mid-run (shouldn't happen for us).
                     self._ema_state[name] = p.detach().clone().float()
                     continue
+                # When resuming from a checkpoint, the EMA shadow can be
+                # loaded on CPU while the model parameters are on CUDA.
+                # Migrate the shadow lazily to the parameter's device on
+                # first use, then update in place.
+                if ema_p.device != p.device:
+                    ema_p = ema_p.to(p.device)
+                    self._ema_state[name] = ema_p
                 # ema_p = decay * ema_p + (1 - decay) * p
                 ema_p.mul_(d).add_(p.detach().float(), alpha=1.0 - d)
 
