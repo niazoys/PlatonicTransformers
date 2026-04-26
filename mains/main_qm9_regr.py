@@ -110,6 +110,13 @@ class QM9Model(pl.LightningModule):
         self.valid_metric = torchmetrics.MeanAbsoluteError()
         self.test_metric = torchmetrics.MeanAbsoluteError()
 
+        # Allow non-strict checkpoint loading. The vector_readout has
+        # output_dim_vec=0 here (regression is scalar-only), so its
+        # parameters are dead weight; this lets us resume from older
+        # checkpoints that were saved with a different vector_readout
+        # depth without erroring on missing/extra keys.
+        self.strict_loading = False
+
     def _init_khot_embeddings(self) -> None:
         """Initialize k-hot embedding tensor for fast lookup."""
         # QM9 has atoms with atomic numbers 1, 6, 7, 8, 9 (H, C, N, O, F)
