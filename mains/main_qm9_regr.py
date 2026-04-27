@@ -26,12 +26,20 @@ from platonic_transformers.utils.config_loader import (
     print_config
 )
 from platonic_transformers.utils.utils import CosineWarmupScheduler, RandomSOd
-from platonic_transformers.utils.callbacks import StopOnPersistentDivergence, TimerCallback
+from platonic_transformers.utils.callbacks import (
+    EMACallback,
+    StopOnPersistentDivergence,
+    TimerCallback,
+)
 
 # Performance optimizations
-torch.set_float32_matmul_precision('high')
 torch.backends.cuda.enable_flash_sdp(True)
 torch.backends.cuda.enable_mem_efficient_sdp(True)
+torch.backends.cudnn.benchmark = True
+torch._dynamo.config.cache_size_limit = 128  # variable atom count per batch
+# Avoid "RuntimeError: received 0 items of ancdata" when num_workers > 0 on
+# clusters with low default FD limits.
+torch.multiprocessing.set_sharing_strategy("file_system")
 
 
 class QM9Model(pl.LightningModule):
@@ -86,8 +94,12 @@ class QM9Model(pl.LightningModule):
             learned_freqs=config.model.learned_freqs,
             freq_init=config.model.freq_init,
             use_key=config.model.use_key,
+            rope_on_values=config.model.get("rope_on_values", False),
+            attention_backend=config.model.get("attention_backend", "scatter"),
         )
-        # self.net = torch.compile(self.net)
+
+        if config.model.get("compile", True):
+            self.net = torch.compile(self.net)
 
         # Initialize normalization parameters
         self.register_buffer('shift', torch.tensor(0.0, dtype=torch.float32))
@@ -96,7 +108,18 @@ class QM9Model(pl.LightningModule):
         # Setup metrics
         self.train_metric = torchmetrics.MeanAbsoluteError()
         self.valid_metric = torchmetrics.MeanAbsoluteError()
+        # Two test metrics: one for the single-pass prediction (no TTA), one
+        # for the TTA-averaged prediction. Logged as ``test MAE`` (= TTA
+        # when repeats>1) and ``test MAE no_tta`` for the comparison.
         self.test_metric = torchmetrics.MeanAbsoluteError()
+        self.test_metric_no_tta = torchmetrics.MeanAbsoluteError()
+
+        # Allow non-strict checkpoint loading. The vector_readout has
+        # output_dim_vec=0 here (regression is scalar-only), so its
+        # parameters are dead weight; this lets us resume from older
+        # checkpoints that were saved with a different vector_readout
+        # depth without erroring on missing/extra keys.
+        self.strict_loading = False
 
     def _init_khot_embeddings(self) -> None:
         """Initialize k-hot embedding tensor for fast lookup."""
@@ -192,7 +215,26 @@ class QM9Model(pl.LightningModule):
         self.valid_metric(pred * self.scale + self.shift, graph.y)
 
     def test_step(self, graph: Data, batch_idx: int) -> None:
-        pred = self(graph)
+        # Test-time augmentation: average predictions over N random SO(3)
+        # rotations. The model is rotation-equivariant but variable-atom-count
+        # numerical precision introduces small noise in fp32 matmuls; TTA
+        # averages it out (ponita QM9 convention).
+        n_repeats = self.config.testing.get("repeats", 1)
+        # Always compute the single-pass prediction (no TTA) on the original
+        # positions for the no-TTA reference metric.
+        pred_no_tta = self(graph)
+        self.test_metric_no_tta(pred_no_tta * self.scale + self.shift, graph.y)
+        if n_repeats <= 1:
+            pred = pred_no_tta
+        else:
+            preds = [pred_no_tta]
+            original_pos = graph.pos.clone()
+            for _ in range(n_repeats - 1):
+                rots = self.rotation_generator(n=graph.batch.max().item() + 1).type_as(original_pos)
+                graph.pos = torch.einsum("bij,bj->bi", rots[graph.batch], original_pos)
+                preds.append(self(graph))
+            graph.pos = original_pos
+            pred = torch.stack(preds).mean(dim=0)
         self.test_metric(pred * self.scale + self.shift, graph.y)
 
     def on_train_epoch_end(self) -> None:
@@ -203,6 +245,7 @@ class QM9Model(pl.LightningModule):
 
     def on_test_epoch_end(self) -> None:
         self.log("test MAE", self.test_metric, prog_bar=True)
+        self.log("test MAE no_tta", self.test_metric_no_tta, prog_bar=False)
     
     def configure_optimizers(self) -> dict[str, object]:
         """Configure optimizer with weight decay and learning rate schedule."""
@@ -288,10 +331,16 @@ def load_data(config: ml_collections.ConfigDict) -> Tuple[DataLoader, DataLoader
     # Set the target for the entire dataset *before* splitting
     dataset.data.y = dataset.data.y[:, target_idx]
 
-    # Create train/val/test split (same as DimeNet)
+    # Create train/val/test split (same as DimeNet). The QM9 SDF nominally has
+    # 130831 entries but PyG's process step drops rows that RDKit can't parse,
+    # so use the actual processed length to avoid an out-of-range permutation.
+    n_total = len(dataset)
+    n_train, n_val, _ = config.dataset.num_splits
     random_state = np.random.RandomState(seed=42)
-    perm = torch.from_numpy(random_state.permutation(np.arange(130831)))
-    train_idx, val_idx, test_idx = perm[:110000], perm[110000:120000], perm[120000:]
+    perm = torch.from_numpy(random_state.permutation(np.arange(n_total)))
+    train_idx = perm[:n_train]
+    val_idx = perm[n_train:n_train + n_val]
+    test_idx = perm[n_train + n_val:]
     datasets = {'train': dataset[train_idx], 'val': dataset[val_idx], 'test': dataset[test_idx]}
     
     # Create dataloaders
@@ -311,6 +360,10 @@ def main(config: ml_collections.ConfigDict) -> None:
     """Train and evaluate the Platonic Transformer on QM9."""
     print_config(config, "QM9 Training Configuration")
     pl.seed_everything(config.seed)
+
+    torch.set_float32_matmul_precision(
+        config.system.get("float32_matmul_precision", "high")
+    )
 
     train_loader, val_loader, test_loader = load_data(config)
 
@@ -350,6 +403,15 @@ def main(config: ml_collections.ConfigDict) -> None:
             patience=es_config.patience,
             grace_epochs=es_config.grace_epochs,
             verbose=False
+        ))
+
+    # Light EMA (decay=0.99, ~70-step half-life). Ponita QM9 convention —
+    # lightly smooths validation while still tracking the cosine-LR descent,
+    # unlike the aggressive 0.9999 diffusion decay we tried earlier.
+    if config.training.get("ema_enabled", False):
+        callbacks.append(EMACallback(
+            decay=config.training.get("ema_decay", 0.99),
+            warmup_steps=config.training.get("ema_warmup_steps", 0),
         ))
 
     trainer = pl.Trainer(

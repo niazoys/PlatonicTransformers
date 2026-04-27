@@ -112,7 +112,6 @@ class PlatonicBlock(nn.Module):
         activation: Callable[[Tensor], Tensor] = F.gelu,
         layer_norm_eps: float = 1e-5,
         norm_type: str = "layernorm",
-        norm_first: bool = True,
         spatial_dims: int = 3,
         drop_path: float = 0.0,
         layer_scale_init_value: Optional[float] = None,
@@ -123,13 +122,13 @@ class PlatonicBlock(nn.Module):
         attention: bool = False,
         use_key: bool = False,
         rope_on_values: bool = False,
+        attention_backend: str = "scatter",
     ) -> None:
         super().__init__()
 
         # --- Group and Dimension Setup ---
         self.group = PLATONIC_GROUPS[solid_name.lower()]
         self.num_G = self.group.G
-        self.norm_first = norm_first
 
         # Validate total dimensions against group size and heads
         if d_model % self.num_G != 0:
@@ -157,6 +156,7 @@ class PlatonicBlock(nn.Module):
             attention=attention,
             use_key=use_key,
             rope_on_values=rope_on_values,
+            attention_backend=attention_backend,
         )
 
         # Equivariant Feed-Forward Network
@@ -206,17 +206,15 @@ class PlatonicBlock(nn.Module):
         interaction_out = self._interaction_block(normed_x, pos, batch, mask, avg_num_nodes)
         if self.gamma_1 is not None:
             interaction_out = self._apply_layer_scale(interaction_out, self.gamma_1)
-        residual = self.drop_path1(interaction_out)
-        x = x + residual
+        x = x + self.drop_path1(interaction_out)
 
         # Feed-Forward Block (pre-normalization is always used)
         normed_ff = self._normalize(x, self.norm2)
         ff_output = self._ff_block(normed_ff)
         if self.gamma_2 is not None:
             ff_output = self._apply_layer_scale(ff_output, self.gamma_2)
-        residual = self.drop_path2(ff_output)
-        x = x + residual
-        
+        x = x + self.drop_path2(ff_output)
+
         return x
 
     def _apply_layer_scale(self, x: Tensor, gamma: Tensor) -> Tensor:

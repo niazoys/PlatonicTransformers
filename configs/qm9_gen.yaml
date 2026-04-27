@@ -1,0 +1,119 @@
+# QM9 Unconditional Molecular Generation (EDM-style diffusion)
+
+seed: 42
+
+# Dataset configuration
+dataset:
+  name: "qm9"
+  data_dir: "./data/qm9_gen"       # QM9Dataset-specific (SDF cache); separate from regr
+  use_charges: true                 # Include integer formal charges as a 6th feature
+  dataset_fraction: 1.0             # Downsample training set for debugging
+
+# Model architecture — follows the paper's DiP setup (14/1152/72)
+model:
+  name: "platoformer"
+  hidden_dim: 1152
+  num_layers: 14
+  num_heads: 72
+  solid_name: "tetrahedron"         # Options: trivial, tetrahedron, octahedron, icosahedron
+  spatial_dim: 3
+  dense_mode: false
+
+  # Task configuration (diffusion is node-level denoising)
+  scalar_task_level: "node"
+  vector_task_level: "node"
+  ffn_readout: true
+
+  # Attention / regularisation
+  mean_aggregation: false
+  attention: true
+  dropout: 0.0
+  drop_path_rate: 0.0
+  layer_scale_init_value: null
+  ffn_dim_factor: 4
+
+  # Positional encoding
+  rope_sigma: 4.0
+  ape_sigma: null
+  learned_freqs: true
+  freq_init: "spiral"
+  use_key: false
+  rope_on_values: true              # Public-repo GTA-style RoPE on values
+  compile: true                     # torch.compile the backbone (mandatory for PlatoFormer)
+  attention_backend: "flash"        # "scatter" (fp32 fallback) | "flash" (faster)
+
+# Diffusion (Karras EDM) configuration
+diffusion:
+  sigma_data: 1.0
+  P_mean: -1.2
+  P_std: 1.2
+  normalize_x_factor: 4.0
+  normalize_charge_factor: 8.0
+  avg_num_nodes: 18.0               # QM9 average molecule size
+  # Per-sample loss weight clamp. The Karras weighting
+  # (sigma^2+sigma_d^2)/(sigma*sigma_d)^2 explodes like 1/sigma^2 at the
+  # small-sigma tail of the log-normal prior and can produce a single batch
+  # loss 100x the running mean, irrecoverably corrupting weights (observed
+  # in DiP-trivial and DiP-tetra verification runs). Clamping the *weight*
+  # (rather than sigma itself) caps each sample's contribution to the loss
+  # without shifting the training noise distribution. Set to null to disable.
+  max_weight: 1000.0
+  # Sampling
+  num_steps: 50
+  sigma_min: 0.002
+  sigma_max: 1.0
+  rho: 7.0
+  S_churn: 10.0
+
+# Training configuration
+training:
+  epochs: 200
+  batch_size: 96
+  gradient_clip_val: 0.5
+  train_augm: true                  # SO(3) rotation augmentation
+  validation_frequency: 20          # Run full (10k-sample) validation every N epochs
+  check_val_every_n_epoch: 1        # Run (cheap) val-loss every epoch
+  # Exponential Moving Average of weights (standard for diffusion training;
+  # without it long QM9-gen runs mode-collapsed around epoch 200).
+  ema_enabled: true
+  ema_decay: 0.999          # mild EMA (~700-step half-life); 0.9999 over-smooths at our 200-epoch budget
+  ema_warmup_steps: 2000
+
+# Optimizer configuration
+optimizer:
+  name: "adamw"
+  lr: 5.0e-4
+  weight_decay: 1.0e-6
+
+# Scheduler configuration
+scheduler:
+  name: "cosine"
+  warmup_epochs: 0
+  use_cosine: true
+
+# Logging configuration
+logging:
+  enabled: true
+  project_name: "Platonic-QM9-Gen"
+  wandb_identity: "platonic-transformers-public"
+  log_every_n_steps: 50
+
+# System configuration
+system:
+  gpus: 1
+  num_workers: 0
+  enable_progress_bar: true
+  timer: null                       # e.g. "00:08:00:00" for SLURM time limit
+  precision: "32"
+  float32_matmul_precision: "medium"  # "medium" (bf16 operands, fp32 accumulator) is fastest and works for QM9. Alternatives: "high" (TF32), "highest" (pure fp32).
+
+# Testing / checkpointing
+testing:
+  test_ckpt: null
+  resume_ckpt: null
+
+# Checkpoint configuration
+checkpoint:
+  monitor: "val_edm/molecule_stability"
+  mode: "max"
+  save_last: true

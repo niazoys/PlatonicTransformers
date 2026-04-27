@@ -34,9 +34,14 @@ def _scatter_softmax(src: torch.Tensor, index: torch.Tensor, dim: int = 0,
     return exp_src / (sum_exp[index] + 1e-16)
 
 try:
-    from torch_cluster import knn_graph  
+    from torch_cluster import knn_graph
 except (ImportError, OSError):
     knn_graph = None
+
+try:
+    from flash_attn import flash_attn_varlen_func  # type: ignore[import-not-found]
+except (ImportError, OSError):  # flash-attn is optional
+    flash_attn_varlen_func = None
 
 from platonic_transformers.models.platoformer.utils import scatter_add
 from platonic_transformers.models.platoformer.rope import PlatonicRoPE
@@ -72,11 +77,22 @@ class PlatonicConv(nn.Module):
         attention: bool = False,
         use_key: bool = False,
         rope_on_values: bool = False,
+        attention_backend: str = "scatter",
     ):
         super().__init__()
 
         # --- Group Setup ---
         self.rope_on_values = rope_on_values
+        if attention_backend not in ("scatter", "flash"):
+            raise ValueError(
+                f"attention_backend must be 'scatter' or 'flash', got {attention_backend!r}"
+            )
+        if attention_backend == "flash" and flash_attn_varlen_func is None:
+            raise ImportError(
+                "attention_backend='flash' requires the flash-attn package "
+                "(pip install flash-attn)."
+            )
+        self.attention_backend = attention_backend
         self.group = PLATONIC_GROUPS[solid_name.lower()]
         self.num_G = self.group.G
         
@@ -234,15 +250,84 @@ class PlatonicConv(nn.Module):
         
 
 
+    def graph_flash_varlen_attention(self,
+        q: torch.Tensor,      # [N, G, H, D]
+        k: torch.Tensor,      # [N, G, H, D]
+        v: torch.Tensor,      # [N, G, H, D]
+        batch: torch.Tensor,  # [N]
+    ) -> torch.Tensor:
+        """Equivalent to graph_scattered_attention (fully-connected within-graph)
+        but computed via flash_attn_varlen_func — one fused CUDA kernel, no
+        explicit N x N meshgrid/mask.
+
+        Parameters
+        ----------
+        q, k, v : [N, G, H, D]  query, key, value tensors (post-RoPE).
+        batch   : [N]  per-node graph index (values 0..B-1, sorted by graph).
+
+        Returns
+        -------
+        out : [N, G*H*D]
+
+        Equivariance: the G axis is treated as an extra head dimension.
+        Because the group acts on the G axis by permutation, and flash varlen
+        applies independent attention per head, the operation commutes with
+        the group action -> equivariance preserved (matches the scatter
+        implementation semantics).
+
+        Dtype: flash_attn_varlen_func requires fp16/bf16. We cast q,k,v to
+        bf16 inside the kernel call and cast the output back to the input
+        dtype. For fp32 callers this means a ~bf16 level of rounding error
+        inside attention but the residual path remains fp32.
+        """
+        N, G, H, D = q.shape
+        GH = G * H
+        device = q.device
+
+        # Contiguous [N, GH, D] view expected by flash varlen.
+        q_flat = q.reshape(N, GH, D).contiguous()
+        k_flat = k.reshape(N, GH, D).contiguous()
+        v_flat = v.reshape(N, GH, D).contiguous()
+
+        # Cumulative sequence lengths [B+1] and max seq length in this batch.
+        # We assume `batch` is sorted (standard PyG convention), so counts can
+        # be derived by one bincount pass.
+        B = int(batch.max().item()) + 1
+        counts = torch.bincount(batch, minlength=B).to(dtype=torch.int32)
+        cu_seqlens = torch.zeros(B + 1, dtype=torch.int32, device=device)
+        cu_seqlens[1:] = torch.cumsum(counts, dim=0)
+        max_seqlen = int(counts.max().item())
+
+        # Flash Attention requires fp16 / bf16. Cast before call, cast back after.
+        orig_dtype = q_flat.dtype
+        q_bf = q_flat.to(torch.bfloat16)
+        k_bf = k_flat.to(torch.bfloat16)
+        v_bf = v_flat.to(torch.bfloat16)
+
+        out_bf = flash_attn_varlen_func(
+            q_bf, k_bf, v_bf,
+            cu_seqlens_q=cu_seqlens,
+            cu_seqlens_k=cu_seqlens,
+            max_seqlen_q=max_seqlen,
+            max_seqlen_k=max_seqlen,
+            causal=False,
+        )  # [N, GH, D]
+
+        out = out_bf.to(orig_dtype)
+        return out.reshape(N, GH * D)
+
     def _forward_graph(self, x: Tensor, pos: Tensor, batch: Tensor, avg_num_nodes=1.0):
         """
         Implementation for graph-structured data.
         Supports both kernelized linear attention and standard softmax attention.
         """
         q_rope, k_rope, v = self._forward_shared(x, pos) # [N, G, H, D_h]
-  
+
         if self.attention:
-            output = self.graph_scattered_attention(q_rope, k_rope, v, batch, pos)
+            if self.attention_backend == "flash":
+                output = self.graph_flash_varlen_attention(q_rope, k_rope, v, batch)
+            else:
+                output = self.graph_scattered_attention(q_rope, k_rope, v, batch, pos)
             # Un-rotate output (GTA Eq. 5: O_i = ρ(g_i)⁻¹ * weighted_sum)
             if self.rope_on_values and self.rope_emb is not None:
                 output_ghd = output.view(-1, self.num_G, self.effective_num_heads, self.head_dim)

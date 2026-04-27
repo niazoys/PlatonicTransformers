@@ -56,7 +56,6 @@ class PlatonicTransformer(nn.Module):
         # Attention block specification:
         mean_aggregation: bool = False,
         dropout: float = 0.1,
-        norm_first: bool = True,
         drop_path_rate: float = 0.0,
         layer_scale_init_value: Optional[float] = None,
         attention: bool = False,
@@ -69,6 +68,7 @@ class PlatonicTransformer(nn.Module):
         freq_init: str = 'random',
         use_key: bool = False,
         rope_on_values: bool = False,
+        attention_backend: str = "scatter",  # "scatter" | "flash"
         activation: str = "gelu",
     ):
         super().__init__()
@@ -101,7 +101,7 @@ class PlatonicTransformer(nn.Module):
             self.ape = APE(hidden_dim, solid_name, ape_sigma, spatial_dim, learned_freqs)
         else:
             self.register_buffer('ape', None)
-               
+
         # --- Modules ---
         # 1. Input Embedding: Applied before lifting to the group.
         # Maps input features to the per-group-element hidden dimension.
@@ -131,18 +131,16 @@ class PlatonicTransformer(nn.Module):
                 attention=attention,
                 use_key=use_key,
                 rope_on_values=rope_on_values,
+                attention_backend=attention_backend,
             ))
-            
+
         if ffn_readout:
             self.scalar_readout = nn.Sequential(
                 PlatonicLinear(self.hidden_dim, self.hidden_dim, solid_name),
                 nn.GELU(),
                 PlatonicLinear(self.hidden_dim, self.num_G * output_dim, solid_name)
             )
-            
             self.vector_readout = nn.Sequential(
-                PlatonicLinear(self.hidden_dim, self.hidden_dim, solid_name),
-                nn.GELU(),
                 PlatonicLinear(self.hidden_dim, self.hidden_dim, solid_name),
                 nn.GELU(),
                 PlatonicLinear(self.hidden_dim, self.num_G * output_dim_vec * spatial_dim, solid_name)

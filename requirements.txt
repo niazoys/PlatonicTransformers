@@ -21,6 +21,7 @@ ase-db-backends
 mendeleev
 scikit-learn
 rdkit
+posebusters  # QM9 generation: physical sanity checks on generated molecules
 
 # -- GPU Acceleration (optional, graceful fallback if unavailable) --
 nvidia-dali-cuda120  # GPU-fused data loading for ImageNet
