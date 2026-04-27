@@ -81,7 +81,7 @@ system:
   enable_progress_bar: true
   timer: null  # e.g., "00:08:00:00" for SLURM time limit
   precision: "32"  # Options: "16-mixed", "bf16-mixed", "32"
-  float32_matmul_precision: "highest"  # pure fp32 (matches ponita convention); "high"=TF32, "medium"=bf16 operands
+  float32_matmul_precision: "medium"  # "medium" (bf16 operands, fp32 accumulator) is fastest and works for QM9. Alternatives: "high" (TF32), "highest" (pure fp32).
 
 # Testing/checkpointing
 testing:
