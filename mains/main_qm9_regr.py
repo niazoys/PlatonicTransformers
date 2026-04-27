@@ -108,7 +108,11 @@ class QM9Model(pl.LightningModule):
         # Setup metrics
         self.train_metric = torchmetrics.MeanAbsoluteError()
         self.valid_metric = torchmetrics.MeanAbsoluteError()
+        # Two test metrics: one for the single-pass prediction (no TTA), one
+        # for the TTA-averaged prediction. Logged as ``test MAE`` (= TTA
+        # when repeats>1) and ``test MAE no_tta`` for the comparison.
         self.test_metric = torchmetrics.MeanAbsoluteError()
+        self.test_metric_no_tta = torchmetrics.MeanAbsoluteError()
 
         # Allow non-strict checkpoint loading. The vector_readout has
         # output_dim_vec=0 here (regression is scalar-only), so its
@@ -216,12 +220,16 @@ class QM9Model(pl.LightningModule):
         # numerical precision introduces small noise in fp32 matmuls; TTA
         # averages it out (ponita QM9 convention).
         n_repeats = self.config.testing.get("repeats", 1)
+        # Always compute the single-pass prediction (no TTA) on the original
+        # positions for the no-TTA reference metric.
+        pred_no_tta = self(graph)
+        self.test_metric_no_tta(pred_no_tta * self.scale + self.shift, graph.y)
         if n_repeats <= 1:
-            pred = self(graph)
+            pred = pred_no_tta
         else:
-            preds = []
+            preds = [pred_no_tta]
             original_pos = graph.pos.clone()
-            for _ in range(n_repeats):
+            for _ in range(n_repeats - 1):
                 rots = self.rotation_generator(n=graph.batch.max().item() + 1).type_as(original_pos)
                 graph.pos = torch.einsum("bij,bj->bi", rots[graph.batch], original_pos)
                 preds.append(self(graph))
@@ -237,6 +245,7 @@ class QM9Model(pl.LightningModule):
 
     def on_test_epoch_end(self) -> None:
         self.log("test MAE", self.test_metric, prog_bar=True)
+        self.log("test MAE no_tta", self.test_metric_no_tta, prog_bar=False)
     
     def configure_optimizers(self) -> dict[str, object]:
         """Configure optimizer with weight decay and learning rate schedule."""
