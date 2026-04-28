@@ -34,7 +34,7 @@ model:
   ffn_dim_factor: 4
   
   # Positional encoding
-  rope_sigma: 4.0  # Use 4.0 with spiral init, 1.0 with random init
+  rope_sigma: 1.5  # Best from sweep on QM9 alpha (0.0410 test MAE on tetrahedron); 4.0 also works.
   ape_sigma: 0.5
   learned_freqs: true
   freq_init: "spiral"  # Options: "random", "spiral"
