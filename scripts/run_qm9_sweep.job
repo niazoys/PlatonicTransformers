@@ -1,0 +1,91 @@
+#!/bin/bash
+#SBATCH --job-name=qm9-sweep
+#SBATCH --partition=gpu_h100
+#SBATCH --gres=gpu:1
+#SBATCH --array=0-23
+#SBATCH --time=2-00:00:00
+#SBATCH --mem=40G
+#SBATCH --export=ALL,NUMEXPR_MAX_THREADS=64
+#SBATCH --output=logs/slurm/%x-%A_%a.out
+#SBATCH --error=logs/slurm/%x-%A_%a.err
+
+set -euo pipefail
+
+cd /projects/prjs2025/PlatonicTransformers
+mkdir -p logs/slurm logs/wandb logs/wandb_sweeps
+
+source /home/mislam1/venvs/platonic-scaling-laws/bin/activate
+
+export PYTHONUNBUFFERED=1
+export WANDB_DIR="${WANDB_DIR:-$PWD/logs/wandb}"
+
+SWEEP_CONFIG="${SWEEP_CONFIG:-sweeps/qm9_regr_table.yaml}"
+SWEEP_PROJECT="${SWEEP_PROJECT:-Platonic-QM9-Regr}"
+SWEEP_ENTITY="${SWEEP_ENTITY:-platonic-transformers-public}"
+SWEEP_AGENT_FILE="${SWEEP_AGENT_FILE:-logs/wandb_sweeps/qm9_regr_table_agent.txt}"
+SWEEP_LOCK_FILE="${SWEEP_LOCK_FILE:-logs/wandb_sweeps/qm9_regr_table_agent.lock}"
+AGENTS_PER_GPU="${AGENTS_PER_GPU:-4}"
+
+if [[ -z "${WANDB_API_KEY:-}" ]] && ! grep -q "api.wandb.ai" "$HOME/.netrc" 2>/dev/null; then
+  echo "W&B is not logged in. Run this once before sbatch: wandb login" >&2
+  exit 1
+fi
+
+python - <<'PY'
+import os
+import torch
+from flash_attn import flash_attn_varlen_func
+import flash_attn
+
+print(f"CUDA_VISIBLE_DEVICES={os.getenv('CUDA_VISIBLE_DEVICES')}")
+print(f"torch={torch.__version__} cuda={torch.version.cuda} cuda_devices={torch.cuda.device_count()}")
+print(f"flash_attn={flash_attn.__version__} OK")
+PY
+
+if [[ -n "${WANDB_SWEEP_AGENT:-}" ]]; then
+  SWEEP_AGENT="$WANDB_SWEEP_AGENT"
+else
+  (
+    flock 200
+    if [[ ! -s "$SWEEP_AGENT_FILE" ]]; then
+      echo "Creating W&B sweep from $SWEEP_CONFIG"
+      sweep_output="$(
+        wandb sweep \
+          --project "$SWEEP_PROJECT" \
+          --entity "$SWEEP_ENTITY" \
+          "$SWEEP_CONFIG" 2>&1 | tee "logs/wandb_sweeps/create_qm9_${SLURM_JOB_ID:-manual}.log"
+      )"
+      sweep_agent="$(printf '%s\n' "$sweep_output" | awk '/wandb agent / {print $NF}' | tail -n 1)"
+      if [[ -z "$sweep_agent" ]]; then
+        sweep_id="$(printf '%s\n' "$sweep_output" | awk -F': ' '/Created sweep with ID/ {print $NF}' | tail -n 1)"
+        sweep_agent="${SWEEP_ENTITY}/${SWEEP_PROJECT}/${sweep_id}"
+      fi
+      if [[ -z "$sweep_agent" ]]; then
+        echo "Could not parse W&B sweep agent path from wandb sweep output" >&2
+        exit 1
+      fi
+      printf '%s\n' "$sweep_agent" > "$SWEEP_AGENT_FILE"
+    fi
+  ) 200>"$SWEEP_LOCK_FILE"
+
+  SWEEP_AGENT="$(cat "$SWEEP_AGENT_FILE")"
+fi
+
+echo "Running $AGENTS_PER_GPU W&B agents on one GPU: $SWEEP_AGENT"
+pids=()
+for local_agent_id in $(seq 1 "$AGENTS_PER_GPU"); do
+  (
+    echo "Starting local agent ${local_agent_id}/${AGENTS_PER_GPU}"
+    wandb agent --count 1 "$SWEEP_AGENT"
+  ) &
+  pids+=("$!")
+done
+
+exit_code=0
+for pid in "${pids[@]}"; do
+  if ! wait "$pid"; then
+    exit_code=1
+  fi
+done
+
+exit "$exit_code"

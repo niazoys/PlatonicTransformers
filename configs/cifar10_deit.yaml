@@ -70,6 +70,7 @@ logging:
 system:
   gpus: 1
   num_workers: 4
+  prefetch_factor: 4
   enable_progress_bar: true
 
 # Testing configuration

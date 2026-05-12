@@ -83,6 +83,7 @@ logging:
 system:
   gpus: 1
   num_workers: 0
+  prefetch_factor: 4
   enable_progress_bar: true
   accumulate_grad_batches: 1
   strategy: "auto"  # "ddp" for multi-GPU
@@ -94,4 +95,3 @@ testing:
   test_ckpt: null
   resume_ckpt: null
   load_weights: null  # Path to load model weights from for a new run
-

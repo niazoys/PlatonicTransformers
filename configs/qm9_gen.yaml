@@ -101,7 +101,8 @@ logging:
 # System configuration
 system:
   gpus: 1
-  num_workers: 0
+  num_workers: 4
+  prefetch_factor: 4
   enable_progress_bar: true
   timer: null                       # e.g. "00:08:00:00" for SLURM time limit
   precision: "32"

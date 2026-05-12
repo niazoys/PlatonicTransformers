@@ -308,29 +308,29 @@ def load_data(
         generator=torch.Generator().manual_seed(config.seed)
     )
    
+    loader_kwargs = {
+        "batch_size": config.training.batch_size,
+        "num_workers": config.system.num_workers,
+        "collate_fn": collate_fn,
+        "pin_memory": True,
+    }
+    if config.system.num_workers > 0:
+        loader_kwargs["prefetch_factor"] = config.system.get("prefetch_factor", 2)
+
     train_loader = DataLoader(
         train_dataset,
-        batch_size=config.training.batch_size,
         shuffle=True,
-        num_workers=config.system.num_workers,
-        collate_fn=collate_fn,
-        pin_memory=True
+        **loader_kwargs,
     )
     val_loader = DataLoader(
         val_dataset,
-        batch_size=config.training.batch_size,
         shuffle=False,
-        num_workers=config.system.num_workers,
-        collate_fn=collate_fn,
-        pin_memory=True
+        **loader_kwargs,
     )
     test_loader = DataLoader(
         test_dataset,
-        batch_size=config.training.batch_size,
         shuffle=False,
-        num_workers=config.system.num_workers,
-        collate_fn=collate_fn,
-        pin_memory=True
+        **loader_kwargs,
     )
     
     return train_loader, val_loader, test_loader

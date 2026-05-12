@@ -1,0 +1,69 @@
+#!/bin/bash
+#SBATCH --job-name=scanobj-one
+#SBATCH --partition=gpu_h100
+#SBATCH --gres=gpu:1
+#SBATCH --time=2-00:00:00
+#SBATCH --mem=40G
+#SBATCH --export=ALL,NUMEXPR_MAX_THREADS=64
+#SBATCH --output=logs/slurm/%x-%j.out
+#SBATCH --error=logs/slurm/%x-%j.err
+
+set -euo pipefail
+
+cd /projects/prjs2025/PlatonicTransformers
+mkdir -p logs/slurm logs/wandb
+
+source /home/mislam1/venvs/platonic-scaling-laws/bin/activate
+
+export PYTHONUNBUFFERED=1
+export WANDB_DIR="${WANDB_DIR:-$PWD/logs/wandb}"
+
+SCANOBJECTNN_DATA_DIR="$(
+  python - <<'PY'
+from pathlib import Path
+import yaml
+
+with open("configs/scanobjectnn.yaml") as f:
+    cfg = yaml.safe_load(f)
+print(Path(cfg["dataset"]["data_dir"]) / cfg["dataset"]["data_split"])
+PY
+)"
+
+if [[ -z "${WANDB_API_KEY:-}" ]] && ! grep -q "api.wandb.ai" "$HOME/.netrc" 2>/dev/null; then
+  echo "W&B is not logged in. Run this once before sbatch: wandb login" >&2
+  exit 1
+fi
+
+if ! find "$SCANOBJECTNN_DATA_DIR" -maxdepth 1 -type f -name '*.h5' -print -quit 2>/dev/null | grep -q .; then
+  echo "ScanObjectNN h5 files not found in $SCANOBJECTNN_DATA_DIR" >&2
+  echo "Update configs/scanobjectnn.yaml: dataset.data_dir before submitting." >&2
+  exit 1
+fi
+
+python - <<'PY'
+import os
+import torch
+from flash_attn import flash_attn_varlen_func
+import flash_attn
+
+print(f"CUDA_VISIBLE_DEVICES={os.getenv('CUDA_VISIBLE_DEVICES')}")
+print(f"torch={torch.__version__} cuda={torch.version.cuda} cuda_devices={torch.cuda.device_count()}")
+print(f"flash_attn={flash_attn.__version__} OK")
+PY
+
+# python mains/main_scanobjectnn.py \
+#   --config configs/scanobjectnn.yaml \
+#   --seed 0 \
+#   --model.solid_name trivial_3 \
+#   --model.attention true \
+#   --logging.project_name Platonic-ScanObjectNN-CamReady
+
+python mains/main_qm9_regr.py \
+  --config configs/qm9_regr.yaml \
+  --seed=1 \
+  --dataset.target=gap \
+  --model.solid_name=tetrahedron \
+  --model.compile=true \
+  --model.attention_backend=flash \
+  --optimizer.weight_decay=1e-8 \
+  --logging.wandb_identity=platonic-transformers-public

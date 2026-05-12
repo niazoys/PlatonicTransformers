@@ -347,19 +347,23 @@ def load_data(config: ml_collections.ConfigDict) -> Tuple[DataLoader, DataLoader
         nbr_pts=config.dataset.num_points,
     )
 
+    loader_kwargs = {
+        "batch_size": config.training.batch_size,
+        "num_workers": config.system.num_workers,
+        "pin_memory": True,
+    }
+    if config.system.num_workers > 0:
+        loader_kwargs["prefetch_factor"] = config.system.get("prefetch_factor", 2)
+
     train_loader = DataLoader(
         train_dataset,
-        batch_size=config.training.batch_size,
         shuffle=True,
-        num_workers=config.system.num_workers,
-        pin_memory=True,
+        **loader_kwargs,
     )
     test_loader = DataLoader(
         test_dataset,
-        batch_size=config.training.batch_size,
         shuffle=False,
-        num_workers=config.system.num_workers,
-        pin_memory=True,
+        **loader_kwargs,
     )
 
     return train_loader, test_loader

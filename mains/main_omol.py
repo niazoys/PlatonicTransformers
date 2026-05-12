@@ -304,6 +304,7 @@ def main(config: ml_collections.ConfigDict) -> None:
         root=config.dataset.data_dir,
         batch_size=config.training.batch_size,
         num_workers=2 if config.system.gpus > 1 else config.system.num_workers,
+        prefetch_factor=config.system.get("prefetch_factor", 2),
         use_charges=False,
         seed=config.seed,
         debug_subset=config.dataset.debug_subset,

@@ -343,13 +343,20 @@ def load_data(config: ml_collections.ConfigDict) -> Tuple[DataLoader, DataLoader
     test_idx = perm[n_train + n_val:]
     datasets = {'train': dataset[train_idx], 'val': dataset[val_idx], 'test': dataset[test_idx]}
     
-    # Create dataloaders
+    # Create dataloaders. PyTorch only accepts prefetch_factor when
+    # num_workers > 0, so keep the default single-process path valid too.
+    loader_kwargs = {
+        "batch_size": config.training.batch_size,
+        "num_workers": config.system.num_workers,
+    }
+    if config.system.num_workers > 0:
+        loader_kwargs["prefetch_factor"] = config.system.get("prefetch_factor", 2)
+
     dataloaders = {
         split: DataLoader(
             split_dataset,
-            batch_size=config.training.batch_size,
             shuffle=(split == 'train'),
-            num_workers=config.system.num_workers,
+            **loader_kwargs,
         )
         for split, split_dataset in datasets.items()
     }

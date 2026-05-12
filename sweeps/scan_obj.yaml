@@ -1,0 +1,18 @@
+program: mains/main_scanobjectnn.py
+name: scanobjectnn-seed-group-attn-conv
+method: grid
+metric:
+  name: valid_acc
+  goal: maximize
+
+# This sweep intentionally keeps all tuned defaults from configs/scanobjectnn.yaml
+# and only varies seed, group, and the interaction type:
+#   attention=true  -> softmax attention
+#   attention=false -> dynamic group convolution
+parameters:
+  seed:
+    values: [0, 1, 2]
+  model.solid_name:
+    values: ["trivial_3", "tetrahedron", "flop_3d_1"]
+  model.attention:
+    values: [true, false]

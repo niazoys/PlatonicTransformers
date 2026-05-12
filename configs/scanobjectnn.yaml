@@ -14,7 +14,7 @@ seed: 0
 # Dataset configuration
 dataset:
   name: "scanobjectnn"
-  data_dir: "./data/scanobjectnn/h5_files"
+  data_dir: "/projects/prjs2025/data/scanobj"
   data_split: "main_split"                # PB_T50_RS variant
   data_version: "_augmentedrot_scale75"
   # Optional per-subset overrides. If unset, both fall back to data_version.
@@ -127,6 +127,7 @@ logging:
 system:
   gpus: 1
   num_workers: 4
+  prefetch_factor: 4
   enable_progress_bar: true
   timer: null
   precision: "32"

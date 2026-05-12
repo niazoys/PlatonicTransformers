@@ -766,7 +766,7 @@ def compute_stats(dataset, save_path=None, use_rmsd=True):
     
     return None, dataset_stats
 
-def get_omol_loaders(root='/ssdstore/omol/', batch_size=32, num_workers=4, 
+def get_omol_loaders(root='/ssdstore/omol/', batch_size=32, num_workers=4, prefetch_factor=2,
                      use_charges=False, seed=42, debug_subset=None, include_hof=False, 
                      referencing=True, scale_shift=False, recalculate=False, use_k_hot=False, 
                      edge=False, edge_attr=False, force_distance_method=True):
@@ -777,6 +777,7 @@ def get_omol_loaders(root='/ssdstore/omol/', batch_size=32, num_workers=4,
         root (str): Path to the dataset root directory
         batch_size (int): Batch size for DataLoaders
         num_workers (int): Number of workers for DataLoaders
+        prefetch_factor (int): Number of batches prefetched by each worker
         use_charges (bool): Whether to include charge information
         seed (int): Random seed for reproducible splits
         debug_subset (int, optional): Use only first N samples for debugging
@@ -874,37 +875,33 @@ def get_omol_loaders(root='/ssdstore/omol/', batch_size=32, num_workers=4,
         dataset.set_scale_shift(scale=dataset_stats['scale'], shift=dataset_stats['shift'])
   
 
+    loader_kwargs = {
+        "batch_size": batch_size,
+        "collate_fn": collate_fn,
+        "num_workers": num_workers,
+        "persistent_workers": True if num_workers > 0 else False,
+        "pin_memory": True,
+    }
+    if num_workers > 0:
+        loader_kwargs["prefetch_factor"] = prefetch_factor
+        loader_kwargs["multiprocessing_context"] = "spawn"
+
     train_loader = DataLoader(
         train_dataset, 
-        batch_size=batch_size, 
         shuffle=True, 
-        collate_fn=collate_fn,
-        num_workers=num_workers,
-        persistent_workers=True if num_workers > 0 else False,
-        pin_memory=True,
-        multiprocessing_context='spawn' # Use spawn to avoid CUDA/fork issues
+        **loader_kwargs,
     )
     
     val_loader = DataLoader(
         val_dataset, 
-        batch_size=batch_size, 
         shuffle=False, 
-        collate_fn=collate_fn,
-        num_workers=num_workers,
-        persistent_workers=True if num_workers > 0 else False,
-        pin_memory=True,
-        multiprocessing_context='spawn' # Use spawn to avoid CUDA/fork issues
+        **loader_kwargs,
     )
     
     test_loader = DataLoader(
         test_dataset, 
-        batch_size=batch_size, 
         shuffle=False, 
-        collate_fn=collate_fn,
-        num_workers=num_workers,
-        persistent_workers=True if num_workers > 0 else False,
-        pin_memory=True,
-        multiprocessing_context='spawn' # Use spawn to avoid CUDA/fork issues
+        **loader_kwargs,
     )
     
     if debug_subset is not None:
@@ -915,4 +912,3 @@ def get_omol_loaders(root='/ssdstore/omol/', batch_size=32, num_workers=4,
     print(f"  Test: {len(test_dataset)} samples")
     
     return train_loader, val_loader, test_loader, energy_coefficients, dataset_stats
-
