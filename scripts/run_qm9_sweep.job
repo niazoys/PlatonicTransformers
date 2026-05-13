@@ -2,10 +2,10 @@
 #SBATCH --job-name=qm9-sweep
 #SBATCH --partition=gpu_h100
 #SBATCH --gres=gpu:1
-#SBATCH --array=0-23
+#SBATCH --array=0-23%4
 #SBATCH --time=2-00:00:00
-#SBATCH --mem=40G
-#SBATCH --export=ALL,NUMEXPR_MAX_THREADS=64
+#SBATCH --mem=80G
+#SBATCH --export=ALL,NUMEXPR_MAX_THREADS=4
 #SBATCH --output=logs/slurm/%x-%A_%a.out
 #SBATCH --error=logs/slurm/%x-%A_%a.err
 
@@ -18,6 +18,10 @@ source /home/mislam1/venvs/platonic-scaling-laws/bin/activate
 
 export PYTHONUNBUFFERED=1
 export WANDB_DIR="${WANDB_DIR:-$PWD/logs/wandb}"
+export OMP_NUM_THREADS="${OMP_NUM_THREADS:-4}"
+export MKL_NUM_THREADS="${MKL_NUM_THREADS:-4}"
+export OPENBLAS_NUM_THREADS="${OPENBLAS_NUM_THREADS:-4}"
+export NUMEXPR_MAX_THREADS="${NUMEXPR_MAX_THREADS:-4}"
 
 SWEEP_CONFIG="${SWEEP_CONFIG:-sweeps/qm9_regr_table.yaml}"
 SWEEP_PROJECT="${SWEEP_PROJECT:-Platonic-QM9-Regr}"
@@ -25,6 +29,7 @@ SWEEP_ENTITY="${SWEEP_ENTITY:-platonic-transformers-public}"
 SWEEP_AGENT_FILE="${SWEEP_AGENT_FILE:-logs/wandb_sweeps/qm9_regr_table_agent.txt}"
 SWEEP_LOCK_FILE="${SWEEP_LOCK_FILE:-logs/wandb_sweeps/qm9_regr_table_agent.lock}"
 AGENTS_PER_GPU="${AGENTS_PER_GPU:-4}"
+ENABLE_CUDA_MPS="${ENABLE_CUDA_MPS:-1}"
 
 if [[ -z "${WANDB_API_KEY:-}" ]] && ! grep -q "api.wandb.ai" "$HOME/.netrc" 2>/dev/null; then
   echo "W&B is not logged in. Run this once before sbatch: wandb login" >&2
@@ -41,6 +46,19 @@ print(f"CUDA_VISIBLE_DEVICES={os.getenv('CUDA_VISIBLE_DEVICES')}")
 print(f"torch={torch.__version__} cuda={torch.version.cuda} cuda_devices={torch.cuda.device_count()}")
 print(f"flash_attn={flash_attn.__version__} OK")
 PY
+
+if [[ "$ENABLE_CUDA_MPS" == "1" ]]; then
+  if command -v nvidia-cuda-mps-control >/dev/null 2>&1; then
+    export CUDA_MPS_PIPE_DIRECTORY="${CUDA_MPS_PIPE_DIRECTORY:-/tmp/nvidia-mps-${SLURM_JOB_ID:-manual}-${SLURM_ARRAY_TASK_ID:-0}}"
+    export CUDA_MPS_LOG_DIRECTORY="${CUDA_MPS_LOG_DIRECTORY:-$PWD/logs/mps/${SLURM_JOB_ID:-manual}_${SLURM_ARRAY_TASK_ID:-0}}"
+    mkdir -p "$CUDA_MPS_PIPE_DIRECTORY" "$CUDA_MPS_LOG_DIRECTORY"
+    nvidia-cuda-mps-control -d
+    trap 'echo quit | nvidia-cuda-mps-control >/dev/null 2>&1 || true; rm -rf "$CUDA_MPS_PIPE_DIRECTORY"' EXIT
+    echo "CUDA MPS enabled with pipe dir: $CUDA_MPS_PIPE_DIRECTORY"
+  else
+    echo "Warning: ENABLE_CUDA_MPS=1 but nvidia-cuda-mps-control was not found; running without MPS." >&2
+  fi
+fi
 
 if [[ -n "${WANDB_SWEEP_AGENT:-}" ]]; then
   SWEEP_AGENT="$WANDB_SWEEP_AGENT"
