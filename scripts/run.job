@@ -1,12 +1,11 @@
 #!/bin/bash
-#SBATCH --job-name=scanobj-one
+#SBATCH --job-name=qm9-gen
 #SBATCH --partition=gpu_h100
 #SBATCH --gres=gpu:1
 #SBATCH --time=2-00:00:00
 #SBATCH --mem=40G
 #SBATCH --export=ALL,NUMEXPR_MAX_THREADS=64
 #SBATCH --output=logs/slurm/%x-%j.out
-#SBATCH --error=logs/slurm/%x-%j.err
 
 set -euo pipefail
 
@@ -58,12 +57,9 @@ PY
 #   --model.attention true \
 #   --logging.project_name Platonic-ScanObjectNN-CamReady
 
-python mains/main_qm9_regr.py \
-  --config configs/qm9_regr.yaml \
+python mains/main_qm9_gen.py \
+  --config configs/qm9_gen.yaml \
   --seed=1 \
-  --dataset.target=gap \
   --model.solid_name=tetrahedron \
   --model.compile=true \
-  --model.attention_backend=flash \
-  --optimizer.weight_decay=1e-8 \
   --logging.wandb_identity=platonic-transformers-public

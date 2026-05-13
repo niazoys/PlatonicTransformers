@@ -165,9 +165,12 @@ sweeps/wandb/
 run-*.wandb
 
 # Processed data
-data/qm9/
+data/
 
 # Notebook checkpoints
 .ipynb_checkpoints
 
-logs/
+logs/slurm
+logs/wandb
+logs/mps
+results/

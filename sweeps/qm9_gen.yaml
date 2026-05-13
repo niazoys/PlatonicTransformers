@@ -1,0 +1,13 @@
+program: mains/main_qm9_gen.py
+name: qm9-gen-trivial-tetra
+method: grid
+metric:
+  name: "val_edm/molecule_stability"
+  goal: maximize
+
+# Two-run QM9 generation sweep:
+#   trivial identity group vs tetrahedral group.
+# All other settings come from configs/qm9_gen.yaml.
+parameters:
+  model.solid_name:
+    values: ["trivial", "tetrahedron"]

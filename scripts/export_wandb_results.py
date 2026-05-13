@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import json
 import re
 from collections import defaultdict
 from pathlib import Path
@@ -63,6 +64,32 @@ def parse_value(value: str) -> Any:
         return float(value)
     except ValueError:
         return value
+
+
+def parse_cli_config_args(args: list[str]) -> dict[str, Any]:
+    parsed: dict[str, Any] = {}
+    for arg in args:
+        if not arg.startswith("--") or "=" not in arg:
+            continue
+        key, value = arg[2:].split("=", 1)
+        parsed[key] = parse_value(value)
+    return parsed
+
+
+def local_run_config(run_id: str, roots: list[str]) -> dict[str, Any]:
+    for root in roots:
+        root_path = Path(root)
+        if not root_path.exists():
+            continue
+        for metadata_path in root_path.glob(f"run-*-{run_id}/files/wandb-metadata.json"):
+            try:
+                metadata = json.loads(metadata_path.read_text())
+            except (OSError, json.JSONDecodeError):
+                continue
+            config = parse_cli_config_args(metadata.get("args", []))
+            if config:
+                return config
+    return {}
 
 
 def truthy(value: Any) -> bool:
@@ -146,6 +173,7 @@ def collect_rows(args: argparse.Namespace) -> tuple[list[dict[str, Any]], list[s
             continue
 
         config = dict(run.config)
+        config.update({key: value for key, value in local_run_config(run.id, args.local_wandb_dir).items() if config_get(config, key) is None})
         summary = dict(run.summary)
         row: dict[str, Any] = {
             "run_id": run.id,
@@ -266,6 +294,7 @@ def main() -> None:
     parser.add_argument("--metric-regex", nargs="*", default=[])
     parser.add_argument("--out-dir", default="results/wandb_export")
     parser.add_argument("--basename", default="wandb_results")
+    parser.add_argument("--local-wandb-dir", nargs="*", default=["mains/logs/wandb"], help="Local W&B directories used to recover CLI config args.")
     parser.add_argument("--no-percent", action="store_false", dest="percent", help="Do not multiply metric values by 100.")
     args = parser.parse_args()
 
