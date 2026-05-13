@@ -1,12 +1,12 @@
 program: mains/main_qm9_regr.py
-name: qm9-regr-table-2seed
+name: qm9-regr-table-1seed
 method: grid
 metric:
   name: "valid MAE"
   goal: minimize
 
 # Reproduce the Platonic Transformer rows in the QM9 regression table:
-#   12 table targets x 2 groups x 2 interaction types x 2 seeds = 96 runs.
+#   12 table targets x 2 groups x 2 interaction types x 1 seeds = 48 runs.
 # All other hyperparameters are inherited from configs/qm9_regr.yaml.
 parameters:
   dataset.target:
@@ -28,4 +28,4 @@ parameters:
   model.attention:
     values: [true, false]
   seed:
-    values: [0, 1]
+    values: [1]

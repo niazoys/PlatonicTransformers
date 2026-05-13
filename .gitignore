@@ -170,7 +170,7 @@ data/
 # Notebook checkpoints
 .ipynb_checkpoints
 
-logs/slurm
-logs/wandb
-logs/mps
-results/
+logs/mps/
+logs/slurm/
+logs/torchinductor
+logs/wandb/

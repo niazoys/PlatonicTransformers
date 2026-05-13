@@ -1,34 +1,40 @@
 #!/bin/bash
 #SBATCH --job-name=qm9-sweep
-#SBATCH --partition=gpu_h100
+#SBATCH --partition=avicenna
+#SBATCH --account=avicennausers
 #SBATCH --gres=gpu:1
-#SBATCH --array=0-23%4
-#SBATCH --time=2-00:00:00
-#SBATCH --mem=80G
-#SBATCH --export=ALL,NUMEXPR_MAX_THREADS=4
+#SBATCH --array=0-3%2
+#SBATCH --time=4-00:00:00
+#SBATCH --cpus-per-task=12
+#SBATCH --mem=40G
 #SBATCH --output=../logs/slurm/%x-%A_%a.out
-#SBATCH --error=../logs/slurm/%x-%A_%a.err
 
 set -euo pipefail
 
-cd /projects/prjs2025/PlatonicTransformers
+cd /ssdstore/projects/mohammad/PlatonicTransformers
 mkdir -p logs/slurm logs/wandb logs/wandb_sweeps
 
-source /home/mislam1/venvs/platonic-scaling-laws/bin/activate
+source /ssdstore/projects/mohammad/PlatonicTransformers/.venv/bin/activate
+
+# source /ivi/zfs/s0/original_homes/mislam/miniconda3/etc/profile.d/conda.sh
+# conda activate /ivi/zfs/s0/original_homes/mislam/miniconda3/envs/lv
 
 export PYTHONUNBUFFERED=1
 export WANDB_DIR="${WANDB_DIR:-$PWD/logs/wandb}"
-export OMP_NUM_THREADS="${OMP_NUM_THREADS:-4}"
-export MKL_NUM_THREADS="${MKL_NUM_THREADS:-4}"
-export OPENBLAS_NUM_THREADS="${OPENBLAS_NUM_THREADS:-4}"
-export NUMEXPR_MAX_THREADS="${NUMEXPR_MAX_THREADS:-4}"
+export OMP_NUM_THREADS="${OMP_NUM_THREADS:-8}"
+export MKL_NUM_THREADS="${MKL_NUM_THREADS:-8}"
+export OPENBLAS_NUM_THREADS="${OPENBLAS_NUM_THREADS:-8}"
+export NUMEXPR_MAX_THREADS="${NUMEXPR_MAX_THREADS:-8}"
+export TORCHINDUCTOR_FX_GRAPH_REMOTE_CACHE=0
+export TORCHINDUCTOR_AUTOTUNE_REMOTE_CACHE=0
+export TORCHINDUCTOR_CACHE_ROOT="${TORCHINDUCTOR_CACHE_ROOT:-$PWD/logs/torchinductor}"
 
 SWEEP_CONFIG="${SWEEP_CONFIG:-sweeps/qm9_regr_table.yaml}"
 SWEEP_PROJECT="${SWEEP_PROJECT:-Platonic-QM9-Regr}"
 SWEEP_ENTITY="${SWEEP_ENTITY:-platonic-transformers-public}"
 SWEEP_AGENT_FILE="${SWEEP_AGENT_FILE:-logs/wandb_sweeps/qm9_regr_table_agent.txt}"
 SWEEP_LOCK_FILE="${SWEEP_LOCK_FILE:-logs/wandb_sweeps/qm9_regr_table_agent.lock}"
-AGENTS_PER_GPU="${AGENTS_PER_GPU:-4}"
+AGENTS_PER_GPU="${AGENTS_PER_GPU:-2}"
 ENABLE_CUDA_MPS="${ENABLE_CUDA_MPS:-1}"
 
 if [[ -z "${WANDB_API_KEY:-}" ]] && ! grep -q "api.wandb.ai" "$HOME/.netrc" 2>/dev/null; then
@@ -38,12 +44,15 @@ fi
 
 python - <<'PY'
 import os
+import sys
 import torch
-from flash_attn import flash_attn_varlen_func
+import torch_geometric
 import flash_attn
 
+print(f"python={sys.executable}")
 print(f"CUDA_VISIBLE_DEVICES={os.getenv('CUDA_VISIBLE_DEVICES')}")
 print(f"torch={torch.__version__} cuda={torch.version.cuda} cuda_devices={torch.cuda.device_count()}")
+print(f"torch_geometric={torch_geometric.__version__}")
 print(f"flash_attn={flash_attn.__version__} OK")
 PY
 
@@ -93,6 +102,10 @@ echo "Running $AGENTS_PER_GPU W&B agents on one GPU: $SWEEP_AGENT"
 pids=()
 for local_agent_id in $(seq 1 "$AGENTS_PER_GPU"); do
   (
+    export TORCHINDUCTOR_CACHE_DIR="$TORCHINDUCTOR_CACHE_ROOT/${SLURM_JOB_ID:-manual}_${SLURM_ARRAY_TASK_ID:-0}_agent_${local_agent_id}"
+    export TRITON_CACHE_DIR="$TORCHINDUCTOR_CACHE_DIR/triton"
+    mkdir -p "$TORCHINDUCTOR_CACHE_DIR" "$TRITON_CACHE_DIR"
+    echo "TorchInductor cache for local agent ${local_agent_id}: $TORCHINDUCTOR_CACHE_DIR"
     echo "Starting local agent ${local_agent_id}/${AGENTS_PER_GPU}"
     wandb agent --count 1 "$SWEEP_AGENT"
   ) &
