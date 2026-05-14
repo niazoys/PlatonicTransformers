@@ -24,6 +24,7 @@ from platonic_transformers.utils.config_loader import (
 )
 from platonic_transformers.utils.utils import CosineWarmupScheduler, RandomSOd
 from platonic_transformers.utils.callbacks import MemoryMonitorCallback, TimerCallback
+from mains._optim import make_param_groups
 
 # Performance optimizations
 torch.set_float32_matmul_precision('medium')
@@ -246,49 +247,8 @@ class OMolModel(pl.LightningModule):
   
     def configure_optimizers(self) -> dict[str, object]:
         """Create optimizer and optional scheduler with custom decay groups."""
-
-        decay = set()
-        no_decay = set()
-        whitelist_weight_modules = (torch.nn.Linear,)
-        blacklist_weight_modules = (torch.nn.LayerNorm, torch.nn.Embedding)
-
-        for mn, module in self.named_modules():
-            for pn, param in module.named_parameters():
-                full_name = f"{mn}.{pn}" if mn else pn
-
-                if pn == 'freqs':
-                    no_decay.add(full_name)
-                elif pn.endswith('bias') or ('layer_scale' in pn):
-                    no_decay.add(full_name)
-                elif pn.endswith('weight') and isinstance(module, whitelist_weight_modules):
-                    decay.add(full_name)
-                elif pn.endswith('kernel'):
-                    decay.add(full_name)
-                elif pn.endswith('weight') and isinstance(module, blacklist_weight_modules):
-                    no_decay.add(full_name)
-
-        param_dict = {pn: param for pn, param in self.named_parameters() if param.requires_grad}
-        missing_params = param_dict.keys() - (decay | no_decay)
-        if missing_params:
-            print(f"Warning: Parameters {missing_params} were not explicitly assigned. Adding to no_decay.")
-            no_decay.update(missing_params)
-
-        assert len(decay & no_decay) == 0, f"Parameters in both decay and no_decay sets: {decay & no_decay}"
-        
-        optim_groups = [
-            {
-                "params": [param_dict[name] for name in sorted(decay) if name in param_dict],
-                "weight_decay": self.config.optimizer.weight_decay,
-            },
-            {
-                "params": [param_dict[name] for name in sorted(no_decay) if name in param_dict],
-                "weight_decay": 0.0,
-            },
-        ]
-        
-        optim_groups = [group for group in optim_groups if group["params"]]
-
-        optimizer = torch.optim.Adam(optim_groups, lr=self.config.optimizer.lr)
+        param_groups = make_param_groups(self, self.config.optimizer.weight_decay)
+        optimizer = torch.optim.Adam(param_groups, lr=self.config.optimizer.lr)
         if self.config.scheduler.use_cosine:
             scheduler = CosineWarmupScheduler(optimizer, self.config.scheduler.warmup_epochs, self.trainer.max_epochs)
             return {"optimizer": optimizer, "lr_scheduler": scheduler, "monitor": "valid MAE (energy) [meV]"}

@@ -26,6 +26,7 @@ from platonic_transformers.utils.config_loader import (
     print_config
 )
 from platonic_transformers.utils.utils import CosineWarmupScheduler, RandomSOd
+from mains._optim import make_param_groups
 from platonic_transformers.utils.callbacks import (
     EMACallback,
     StopOnPersistentDivergence,
@@ -249,56 +250,8 @@ class QM9Model(pl.LightningModule):
     
     def configure_optimizers(self) -> dict[str, object]:
         """Configure optimizer with weight decay and learning rate schedule."""
-        decay = set()
-        no_decay = set()
-        whitelist_weight_modules = (torch.nn.Linear,)
-        blacklist_weight_modules = (torch.nn.LayerNorm, torch.nn.Embedding)
-
-        for mn, m in self.named_modules():  # mn is module name, m is module instance
-            for pn, p in m.named_parameters():  # pn is parameter name (e.g., 'weight', 'bias', 'freqs')
-                fpn = f'{mn}.{pn}' if mn else pn  # fpn is the full parameter name
-
-                if pn == 'freqs':
-                    no_decay.add(fpn)
-                elif pn.endswith('bias') or ('layer_scale' in pn):
-                    no_decay.add(fpn)
-                elif pn.endswith('weight') and isinstance(m, whitelist_weight_modules):
-                    decay.add(fpn)
-                elif pn.endswith('kernel'):
-                    decay.add(fpn)
-                elif pn.endswith('weight') and isinstance(m, blacklist_weight_modules):
-                    no_decay.add(fpn)
-                # Parameters not matching any rule will be caught later and added to no_decay by default.
-
-        param_dict = {pn: p for pn, p in self.named_parameters() if p.requires_grad}
-
-        current_params_in_groups = decay | no_decay
-        missing_params = param_dict.keys() - current_params_in_groups
-        if missing_params:
-            print(f"Warning: Parameters {missing_params} were not explicitly assigned to decay/no_decay by specific rules. Adding to no_decay by default.")
-            no_decay.update(missing_params) # Add missing parameters to no_decay group
-
-        inter_params = decay & no_decay
-        union_params = decay | no_decay
-        assert len(inter_params) == 0, f"Parameters {inter_params} found in both decay and no_decay sets!"
-        
-        # Ensure all learnable parameters are covered
-        assert len(param_dict.keys() - union_params) == 0, f"Parameters {param_dict.keys() - union_params} not assigned to any optimizer group!"
-
-        optim_groups = [
-            {"params": [param_dict[p_name] for p_name in sorted(list(decay)) if p_name in param_dict], "weight_decay": self.config.optimizer.weight_decay},
-            {"params": [param_dict[p_name] for p_name in sorted(list(no_decay)) if p_name in param_dict], "weight_decay": 0.0},
-        ]
-        
-        # Filter out empty groups (e.g., if 'decay' set is empty)
-        optim_groups = [group for group in optim_groups if group["params"]]
-
-        if not optim_groups and list(param_dict.keys()): # Should not happen if there are learnable params
-            raise ValueError("No optimizer groups were created, but there are learnable parameters.")
-        elif not optim_groups and not list(param_dict.keys()): # No learnable params
-             print("Warning: No learnable parameters found for the optimizer.")
-
-        optimizer = torch.optim.Adam(optim_groups, lr=self.config.optimizer.lr)
+        param_groups = make_param_groups(self, self.config.optimizer.weight_decay)
+        optimizer = torch.optim.Adam(param_groups, lr=self.config.optimizer.lr)
         if self.config.scheduler.use_cosine:
             scheduler = CosineWarmupScheduler(optimizer, self.config.scheduler.warmup_epochs, self.trainer.max_epochs)
             return {"optimizer": optimizer, "lr_scheduler": scheduler, "monitor": "valid MAE"}

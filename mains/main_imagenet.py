@@ -23,6 +23,7 @@ from platonic_transformers.models.platoformer.platoformer import PlatonicTransfo
 from platonic_transformers.models.platoformer.groups import PLATONIC_GROUPS
 from platonic_transformers.utils.utils import CosineWarmupScheduler, RandomSOd
 from platonic_transformers.utils.callbacks import TimerCallback
+from mains._optim import make_param_groups
 
 # Use quack's fused cross-entropy kernel when available (H100+)
 try:
@@ -172,20 +173,13 @@ class ImageNetModel(pl.LightningModule):
 
     def configure_optimizers(self) -> dict:
         """Configure optimizer and learning rate scheduler."""
+        param_groups = make_param_groups(self, self.config.optimizer.weight_decay)
         optimizer_name = self.config.optimizer.name.lower()
         if optimizer_name == "adamw":
-            optimizer = torch.optim.AdamW(
-                self.parameters(),
-                lr=self.config.optimizer.lr,
-                weight_decay=self.config.optimizer.weight_decay,
-            )
+            optimizer = torch.optim.AdamW(param_groups, lr=self.config.optimizer.lr)
         elif optimizer_name == "lamb":
             from timm.optim import Lamb
-            optimizer = Lamb(
-                self.parameters(),
-                lr=self.config.optimizer.lr,
-                weight_decay=self.config.optimizer.weight_decay,
-            )
+            optimizer = Lamb(param_groups, lr=self.config.optimizer.lr)
         else:
             raise ValueError(
                 f"Unknown optimizer: {optimizer_name}. Supported: 'adamw', 'lamb'"

@@ -36,6 +36,7 @@ from platonic_transformers.utils.config_loader import (
     print_config,
 )
 from platonic_transformers.utils.utils import RandomSOd, subtract_mean
+from mains._optim import make_param_groups
 
 # Performance backends (mirrors our OMol training setup).
 # Keep weights/activations in fp32 (diffusion loss weighting is sigma-sensitive and
@@ -224,11 +225,8 @@ class QM9GenModel(pl.LightningModule):
         return None
 
     def configure_optimizers(self):
-        optimizer = torch.optim.AdamW(
-            self.parameters(),
-            lr=self.config.optimizer.lr,
-            weight_decay=self.config.optimizer.weight_decay,
-        )
+        param_groups = make_param_groups(self, self.config.optimizer.weight_decay)
+        optimizer = torch.optim.AdamW(param_groups, lr=self.config.optimizer.lr)
         if self.config.scheduler.use_cosine:
             scheduler = CosineAnnealingLR(
                 optimizer,
