@@ -32,6 +32,9 @@ if __name__ == "__main__":
             if mode not in _MODE_FLAGS:
                 sys.exit(f"--mode must be 'attn' or 'conv', got {mode!r}")
             mode_flags = _MODE_FLAGS[mode]
+        elif arg.startswith("--solid_name="):
+            # WandB passes the bare parameter name; remap to the config path
+            expanded.append("--model." + arg[2:])
         else:
             expanded.append(arg)
     sys.argv = [sys.argv[0]] + expanded + mode_flags

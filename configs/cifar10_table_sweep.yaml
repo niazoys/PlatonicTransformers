@@ -47,9 +47,7 @@ command:
   - ${env}
   - python
   - ${program}
-  - --seed=${seed}
-  - --model.solid_name=${solid_name}
-  - --mode=${mode}
+  - ${args}
   - --model.freq_init=random
   - --model.rope_sigma=1.0
   - --model.ape_sigma=10.0
