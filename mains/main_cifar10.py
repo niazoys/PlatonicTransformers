@@ -40,6 +40,9 @@ ssl._create_default_https_context = ssl._create_unverified_context
 
 # Performance optimization
 torch.set_float32_matmul_precision('medium')
+torch.backends.cuda.enable_flash_sdp(True)
+torch.backends.cuda.enable_mem_efficient_sdp(True)
+torch.backends.cudnn.benchmark = True
 
 
 class CIFAR10Model(pl.LightningModule):
@@ -101,7 +104,11 @@ class CIFAR10Model(pl.LightningModule):
             freq_init=config.model.freq_init,
             use_key=config.model.use_key,
             rope_on_values=config.model.get("rope_on_values", False),
+            attention_backend=config.model.get("attention_backend", "flash"),
         )
+
+        if config.model.get("compile", True):
+            self.net = torch.compile(self.net)
 
         # Setup metrics
         num_classes = config.dataset.num_classes

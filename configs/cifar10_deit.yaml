@@ -38,6 +38,8 @@ model:
   learned_freqs: true
   freq_init: "spiral"  # Options: "random", "spiral"
   use_key: false
+  compile: true
+  attention_backend: "flash"
 
 # Training configuration (overrides defaults)
 training:
