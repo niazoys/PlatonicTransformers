@@ -89,10 +89,19 @@ class PlatonicConv(nn.Module):
                 f"attention_backend must be 'scatter' or 'flash', got {attention_backend!r}"
             )
         if attention_backend == "flash" and flash_attn_varlen_func is None:
-            raise ImportError(
-                "attention_backend='flash' requires the flash-attn package "
-                "(pip install flash-attn)."
-            )
+            if attention:
+                raise ImportError(
+                    "attention_backend='flash' requires the flash-attn package "
+                    "(pip install flash-attn)."
+                )
+            else:
+                import warnings
+                warnings.warn(
+                    "attention_backend='flash' has no effect when attention=False "
+                    "(conv/linear mode). Falling back to scatter.",
+                    stacklevel=2,
+                )
+                attention_backend = "scatter"
         self.attention_backend = attention_backend
         self.group = PLATONIC_GROUPS[solid_name.lower()]
         self.num_G = self.group.G

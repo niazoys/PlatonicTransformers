@@ -1,0 +1,22 @@
+#!/bin/bash
+#SBATCH --job-name=c10-sweep
+#SBATCH --time=2-00:00:00
+#SBATCH --gres=gpu:1
+#SBATCH --mem=30G
+#SBATCH --cpus-per-task=8
+#SBATCH --partition=performance
+#SBATCH --output=%x-%j.out
+
+# Run one sweep agent (consumes one run from the WandB queue).
+# Pass SWEEP_ID via --export, e.g.:
+#   for i in {1..36}; do
+#     sbatch --export=ALL,SWEEP_ID=<id> scripts/cifar10_table_hipster.job
+#   done
+
+cd ~/platonic-transformers-sweep/
+source .venv/bin/activate
+
+export WANDB__SERVICE_WAIT=900
+export WANDB_ENTITY=platonic-transformers-public
+
+wandb agent --count 1 platonic-transformers-public/Platonic-CIFAR10/${SWEEP_ID}
