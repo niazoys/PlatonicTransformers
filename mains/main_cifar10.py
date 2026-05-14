@@ -100,6 +100,7 @@ class CIFAR10Model(pl.LightningModule):
             learned_freqs=config.model.learned_freqs,
             freq_init=config.model.freq_init,
             use_key=config.model.use_key,
+            rope_on_values=config.model.get("rope_on_values", False),
         )
 
         # Setup metrics
