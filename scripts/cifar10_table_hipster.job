@@ -19,4 +19,4 @@ source .venv/bin/activate
 export WANDB__SERVICE_WAIT=900
 export WANDB_ENTITY=platonic-transformers-public
 
-wandb agent --count 1 platonic-transformers-public/Platonic-CIFAR10/${SWEEP_ID}
+wandb agent platonic-transformers-public/Platonic-CIFAR10/${SWEEP_ID}
