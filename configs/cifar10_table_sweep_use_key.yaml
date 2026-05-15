@@ -1,0 +1,42 @@
+# WandB grid sweep identical to cifar10_table_sweep.yaml but with use_key=True
+# fixed for all runs (both attn and conv modes).
+#
+# Grid: 6 symmetry groups × 2 modes (attention / conv) × 3 seeds = 36 runs.
+# Hyperparameters: freq_init=random, rope_sigma=1.0, ape_sigma=10.0, use_key=True
+#
+# See cifar10_table_sweep.yaml for full usage instructions.
+# Substitute this file wherever that one is referenced.
+
+program: mains/main_cifar10_table_sweep_use_key.py
+method: grid
+project: Platonic-CIFAR10
+entity: platonic-transformers-public
+
+command:
+  - ${env}
+  - python
+  - ${program}
+  - ${args}
+  - --model.freq_init=random
+  - --model.rope_sigma=1.0
+  - --model.ape_sigma=10.0
+  - --model.use_key=true
+
+parameters:
+  solid_name:
+    values:
+      - trivial_2    # ∅*  paper notation
+      - flop_2d_2    # Flop
+      - cyclic_4     # C_4
+      - cyclic_6     # C_6
+      - dihedral_2   # D_4  (|G|=4: 2 rotations + 2 reflections)
+      - dihedral_3   # D_6  (|G|=6: 3 rotations + 3 reflections)
+  mode:
+    values:
+      - attn         # softmax attention,  use_key=true (from sweep command)
+      - conv         # linear / conv mode, use_key=true (from sweep command)
+  seed:
+    values:
+      - 1
+      - 2
+      - 3
