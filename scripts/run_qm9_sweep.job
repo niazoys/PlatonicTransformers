@@ -3,8 +3,8 @@
 #SBATCH --partition=avicenna
 #SBATCH --account=avicennausers
 #SBATCH --gres=gpu:1
-#SBATCH --array=0-3%2
-#SBATCH --time=4-00:00:00
+#SBATCH --array=0-4%2
+#SBATCH --time=6-00:00:00
 #SBATCH --cpus-per-task=12
 #SBATCH --mem=40G
 #SBATCH --output=../logs/slurm/%x-%A_%a.out
