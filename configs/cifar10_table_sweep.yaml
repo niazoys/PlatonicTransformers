@@ -27,16 +27,13 @@
 #
 #    WandB prints a SWEEP_ID (e.g. abc12345).
 #
-# 2. Run agents — one agent consumes one run from the queue.
+# 2. Run agents — each agent consumes runs from the shared queue.
 #    On a single GPU machine, process all 36 sequentially:
 #
 #      wandb agent --count 36 platonic-transformers-public/Platonic-CIFAR10/<SWEEP_ID>
 #
-#    On a cluster, submit one job per run (see scripts/cifar10_table_geodude.job):
-#
-#      for i in {1..36}; do
-#        sbatch --export=ALL,SWEEP_ID=<SWEEP_ID> scripts/cifar10_table_geodude.job
-#      done
+#    To parallelise, launch the same command on several GPUs/machines; each
+#    agent keeps pulling runs until the queue is exhausted.
 
 program: mains/main_cifar10_table_sweep.py
 method: grid
