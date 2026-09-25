@@ -1,3 +1,4 @@
+import json
 import os
 import sys
 import time
@@ -581,6 +582,26 @@ def load_data(config: ml_collections.ConfigDict):
 # ---------------------------------------------------------------------------
 
 
+def save_test_metrics(config: ml_collections.ConfigDict, test_results: list) -> None:
+    """Write the metrics returned by ``Trainer.test`` to ``testing.metrics_out``
+    (a JSON file), tagged with the S_churn value and checkpoint used.
+
+    No-op if ``testing.metrics_out`` is not set.
+    """
+    metrics_out = config.testing.get("metrics_out", None)
+    if not metrics_out:
+        return
+    payload = {
+        "test_ckpt": config.testing.test_ckpt,
+        "S_churn": config.diffusion.S_churn,
+        "metrics": test_results[0] if test_results else {},
+    }
+    os.makedirs(os.path.dirname(os.path.abspath(metrics_out)), exist_ok=True)
+    with open(metrics_out, "w") as f:
+        json.dump(payload, f, indent=2)
+    print(f"Saved test metrics to {metrics_out}")
+
+
 def main(config: ml_collections.ConfigDict) -> None:
     print_config(config, "QM9 Generation Configuration")
     torch.set_float32_matmul_precision(config.system.get("float32_matmul_precision", "high"))
@@ -672,7 +693,8 @@ def main(config: ml_collections.ConfigDict) -> None:
         model = QM9GenModel(config)
         model.set_num_atoms_sampler(num_atoms_sampler)
         model.init_molecule_analyzer(dataset_info, edm_smiles_list, zatom_smiles_list)
-        trainer.test(model, val_loader, ckpt_path=test_ckpt)
+        test_results = trainer.test(model, val_loader, ckpt_path=test_ckpt)
+        save_test_metrics(config, test_results)
 
 
 if __name__ == "__main__":
