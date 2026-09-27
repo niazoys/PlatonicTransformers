@@ -19,6 +19,7 @@ QM9_DATA_DIR="${QM9_DATA_DIR:-$PROJECT_DIR/datasets/qm9_gen}"
 S_CHURN="${S_CHURN:-0.0}"
 COMPILE="${COMPILE:-false}"
 LR="${LR:-1.5e-4}"  
+SAMPLER="${SAMPLER:-edm}"   # "edm" (Karras/Heun + S_churn) or "fm" (plain ODE in t)
 
 cd "$PROJECT_DIR"
 
@@ -45,4 +46,6 @@ srun "$PROJECT_DIR/.venv/bin/python" mains/main_qm9_gen_FM.py \
     --logging.wandb_identity=null \
     --model.compile="$COMPILE" \
     --diffusion.S_churn="$S_CHURN" \
-    --optimizer.lr="$LR"
+    --diffusion.sampler="$SAMPLER" \
+    --optimizer.lr="$LR" \
+    "$@"

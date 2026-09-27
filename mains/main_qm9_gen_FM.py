@@ -218,6 +218,8 @@ class QM9FMModel(pl.LightningModule):
         estimate the Karras-schedule arithmetic below operates on.
         """
         self.eval()
+        if self.config.diffusion.get("sampler", "edm") == "fm":
+            return self._sample_fm_ode(num_molecules, num_steps)
         num_steps = num_steps or self.config.diffusion.num_steps
         if S_churn is None:
             S_churn = self.config.diffusion.get("S_churn", 0.0)
@@ -268,16 +270,64 @@ class QM9FMModel(pl.LightningModule):
                 x_edm = x_hat + (sigma_next - sigma_hat) * (0.5 * dx + 0.5 * dx2)
                 pos_edm = pos_hat + (sigma_next - sigma_hat) * (0.5 * dpos + 0.5 * dpos2)
 
-        pos_edm = subtract_mean(pos_edm, batch)
+        return self._to_molecules(x_edm, pos_edm, batch, num_molecules)
+
+    @torch.no_grad()
+    def _sample_fm_ode(self, num_molecules, num_steps=None):
+        """Plain flow-matching sampler: integrate dz/dt = v(z, t) in t.
+
+        Uniform t grid from ``diffusion.fm_t_start`` (default 0, pure noise) to 1,
+        with Heun (default) or Euler steps (``diffusion.fm_integrator``). No noise is injected.
+        Starting at t_start > 0 draws z = (1 - t_start) * noise, which with
+        t_start=0.5 is the same start as the EDM sampler at sigma_max=1.
+        The network is evaluated at t clamped to [fm_t_eps, 1 - fm_t_eps],
+        since c_noise = log((1-t)/t)/4 is infinite at both endpoints.
+        """
+        num_steps = num_steps or self.config.diffusion.num_steps
+        t_start = self.config.diffusion.get("fm_t_start", 0.0)
+        t_eps = self.config.diffusion.get("fm_t_eps", 1e-4)
+        integrator = self.config.diffusion.get("fm_integrator", "heun")
+        if integrator not in ("euler", "heun"):
+            raise ValueError(f"Unsupported fm_integrator '{integrator}'")
+
+        num_atoms = self.num_atoms_sampler(num_molecules).to(self.device)
+        graph_ids = torch.arange(num_molecules, device=self.device)
+        batch = torch.repeat_interleave(graph_ids, num_atoms)
+
+        def velocity(x, pos, t):
+            t_full = torch.full((num_molecules,), float(t), device=self.device).clamp(t_eps, 1 - t_eps)
+            vx, vp = self._velocity(x, pos, batch, t_full)
+            return vx, subtract_mean(vp, batch)
+
+        x = (1 - t_start) * torch.randn((len(batch), 5 + int(self.config.dataset.use_charges)), device=self.device)
+        pos = (1 - t_start) * subtract_mean(torch.randn((len(batch), 3), device=self.device), batch)
+
+        t_steps = torch.linspace(t_start, 1.0, num_steps + 1).tolist()
+        for i in range(num_steps):
+            t_cur, t_next = t_steps[i], t_steps[i + 1]
+            dt = t_next - t_cur
+            vx, vp = velocity(x, pos, t_cur)
+            x_next, pos_next = x + dt * vx, pos + dt * vp
+            # Heun correction, skipped on the last step (t_next = 1), as in the EDM sampler.
+            if integrator == "heun" and i < num_steps - 1:
+                vx2, vp2 = velocity(x_next, pos_next, t_next)
+                x_next = x + dt * 0.5 * (vx + vx2)
+                pos_next = pos + dt * 0.5 * (vp + vp2)
+            x, pos = x_next, pos_next
+
+        return self._to_molecules(x, pos, batch, num_molecules)
+
+    def _to_molecules(self, x, pos, batch, num_molecules):
+        pos = subtract_mean(pos, batch)
         samples = []
         for i in range(num_molecules):
             mask = batch == i
-            atom_types = x_edm[mask, :5].argmax(dim=-1)
+            atom_types = x[mask, :5].argmax(dim=-1)
             if self.config.dataset.use_charges:
-                charges = (x_edm[mask, -1] * self.config.diffusion.normalize_charge_factor).round().long()
-                samples.append((pos_edm[mask], atom_types, charges))
+                charges = (x[mask, -1] * self.config.diffusion.normalize_charge_factor).round().long()
+                samples.append((pos[mask], atom_types, charges))
             else:
-                samples.append((pos_edm[mask], atom_types))
+                samples.append((pos[mask], atom_types))
         return samples
 
     def on_validation_epoch_end(self):
