@@ -7,6 +7,8 @@
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-MIT-green.svg" alt="License"></a>
 </p>
 
+> 🆕 **New: flow matching for QM9 molecule generation.** [`mains/main_qm9_gen_FM.py`](mains/main_qm9_gen_FM.py) trains the Platonic Transformer with straight-line conditional flow matching. Samples can be drawn with either a stochastic sampler or a plain FM ODE sampler (`SAMPLER=edm|fm`). With the stochastic sampler it matches the EDM diffusion baseline, with **94.4%** molecule stability and **98.4%** validity. See the [FM guide](docs/qm9_gen_fm.md) for the formulation, both samplers, run commands and full results.
+
 
 
 <a href="https://www.arxiv.org/abs/2510.03511"> Platonic Transformers: A Solid Choice For Equivariance</a> by <a href="https://niazoys.github.io">Mohammad Mohaiminul Islam</a>, <a href="https://rish-16.github.io/">Rishabh Anand</a>, <a href="https://amlab.science.uva.nl/people/DavidWessels/">David R. Wessels</a>, <a href="https://www.linkedin.com/in/friso-de-kruiff/">Friso de Kruiff</a>, <a href="https://pure.amsterdamumc.nl/en/persons/thijs-kuipers-3">Thijs P. Kuipers</a>, <a href="https://www.cs.yale.edu/homes/ying-rex/">Rex Ying</a>, <a href="https://qurai.amsterdam/researcher/clarisa-sanchez/">Clara I. Sánchez</a>, <a href="https://amlab.science.uva.nl/people/SharvareeVadgama/">Sharvaree Vadgama</a>, <a href="https://georg-bn.github.io/">Georg Bökman</a>, <a href="https://ebekkers.github.io/">Erik J. Bekkers</a>

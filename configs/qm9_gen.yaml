@@ -90,6 +90,9 @@ scheduler:
   name: "cosine"
   warmup_epochs: 0
   use_cosine: true
+  T_max_epochs: null                # cosine period; defaults to training.epochs if unset -
+                                     # override to decouple a short probe run's schedule shape
+                                     # from a longer target run's (e.g. hparam sweeps)
 
 # Logging configuration
 logging:
@@ -111,6 +114,7 @@ system:
 testing:
   test_ckpt: null
   resume_ckpt: null
+  metrics_out: null                 # path to write test-phase metrics as JSON, e.g. for S_churn sweeps
 
 # Checkpoint configuration
 checkpoint:
