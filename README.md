@@ -393,7 +393,43 @@ On Snellius, the public release includes the tetrahedron launcher:
 sbatch scripts/run_omol_snellius_tetra.sh
 ```
 
+#### ASE Calculator
 
+A trained OMol force field can be used from [ASE](https://wiki.fysik.dtu.dk/ase/) through
+`platonic_transformers.calculator.PlatonicCalculator` (install the optional dependency with
+`pip install ase` or `pip install "platonic_transformers[ase]"`):
+
+```python
+from ase.build import molecule
+from ase.optimize import BFGS
+from platonic_transformers.calculator import PlatonicCalculator
+
+# Lightning checkpoint written by mains/main_omol.py (last.ckpt / best-*.ckpt).
+# The model config, energy scale and per-element reference energies are read from it;
+# EMA weights are used when the checkpoint contains them.
+calc = PlatonicCalculator.from_checkpoint("path/to/last.ckpt", device="cuda")
+
+atoms = molecule("CH3OH")
+atoms.info["charge"], atoms.info["spin"] = 0, 1   # total charge / spin multiplicity
+atoms.calc = calc
+print(atoms.get_potential_energy())   # eV
+print(atoms.get_forces())             # eV/Å
+BFGS(atoms).run(fmax=0.05)
+```
+
+Notes:
+
+- Energies are in eV and forces in eV/Å. The network predicts in the normalised space used
+  for training (reference energies subtracted, divided by the training RMSD); the calculator
+  rescales and adds the `omol_elem_refs` back, so `get_potential_energy()` is a total energy.
+- `forces="direct"` (default) returns the model's equivariant force head, exactly as trained
+  and evaluated; `forces="autograd"` returns the conservative `-dE/dR` instead.
+- Charge and spin multiplicity are read from `atoms.info["charge"]` / `atoms.info["spin"]`
+  (defaults `0` / `1`), matching the OMol25 dataset loader.
+- A `PlatonicForceField` you built yourself can be wrapped directly:
+  `PlatonicCalculator(model, scale=..., element_refs=...)`.
+- Periodic systems are not supported (no `stress`); the OMol models are trained on isolated
+  molecules.
 
 ## 📖 Citation
 
