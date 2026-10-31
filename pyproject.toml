@@ -47,6 +47,10 @@ dependencies = [
     "pyyaml",
 ]
 
+[project.optional-dependencies]
+# `platonic_transformers.calculator` (ASE Calculator for the OMol force fields)
+ase = ["ase"]
+
 [project.urls]
 Homepage = "https://pypi.org/project/platonic_transformers/"
 Repository = "https://github.com/niazoys/PlatonicTransformers"

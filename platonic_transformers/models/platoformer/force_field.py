@@ -235,3 +235,60 @@ class PlatonicForceField(nn.Module):
 
         forces = vectors.squeeze(-2).to(torch.float32)
         return {"energy": energy, "forces": forces}
+
+
+def build_force_field(model_cfg) -> "PlatonicForceField":
+    """Instantiate a :class:`PlatonicForceField` from a ``model:`` config block.
+
+    ``model_cfg`` is the ``model`` section of an OMol config (``configs/omol.yaml``)
+    as a plain ``dict`` or an ``ml_collections.ConfigDict``; it is also what the
+    Lightning checkpoints written by ``mains/main_omol.py`` store under
+    ``hyper_parameters["config"]["model"]``. The key -> constructor-argument mapping
+    mirrors ``OMolModel.__init__`` so that a checkpoint's ``net.*`` weights load
+    into the returned module unchanged.
+    """
+    def get(key, default=None):
+        if isinstance(model_cfg, dict):
+            return model_cfg.get(key, default)
+        return getattr(model_cfg, key, default)
+
+    return PlatonicForceField(
+        max_num_elements=int(get("max_num_elements", 100)),
+        hidden_dim=int(get("hidden_dim")),
+        nhead=int(get("num_heads")),
+        num_layers=int(get("num_layers")),
+        solid_name=str(get("solid_name", "tetrahedron")),
+        ffn_dim_factor=int(get("ffn_dim_factor", 4)),
+        dropout=float(get("dropout", 0.0)),
+        rope_sigma=float(get("rope_sigma", 1.0)),
+        learned_freqs=bool(get("learned_freqs", True)),
+        dense_mode=bool(get("dense_mode", False)),
+        embed_init_std=get("embed_init_std", None),
+        layer_scale_init_value=get("layer_scale_init_value", None),
+        attention=bool(get("attention", True)),
+        avg_num_nodes=float(get("avg_num_nodes", 1.0)),
+        rope_on_values=bool(get("rope_on_values", False)),
+        activation=str(get("activation", "gelu")),
+        readout_activation=get("readout_activation", None),
+        atom_embed=str(get("atom_embed", "learned")),
+        drop_path_rate=float(get("drop_path_rate", 0.0)),
+        freq_init=str(get("freq_init", "random")),
+        attention_backend=str(get("attention_backend", "scatter")),
+        qk_norm=bool(get("qk_norm", False)),
+        swiglu=bool(get("swiglu", False)),
+        qk_dim_factor=int(get("qk_dim_factor", 1)),
+        v_dim_factor=int(get("v_dim_factor", 1)),
+        rope_v_independent=bool(get("rope_v_independent", False)),
+        use_key=bool(get("use_key", False)),
+        norm_type=str(get("norm_type", "layernorm")),
+        chgspin_mode=str(get("chgspin_mode", "off")),
+        chgspin_emb_dim=get("chgspin_embed_dim", None),
+        chgspin_mix_init_std=float(get("chgspin_mix_init_std", 0.02)),
+        chgspin_layerwise=bool(get("chgspin_layerwise", False)),
+        chgspin_layerwise_gate=bool(get("chgspin_layerwise_gate", False)),
+        chgspin_film=bool(get("chgspin_film", False)),
+        interaction_radius=get("interaction_radius", None),
+        cutoff_p=int(get("cutoff_p", 6)),
+        max_num_neighbors=int(get("max_num_neighbors", 1000)),
+        local_global=bool(get("local_global", False)),
+    )
